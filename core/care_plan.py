@@ -1,66 +1,72 @@
 """
 core/care_plan.py
 Shared evolving care plan — the single source of truth shared across all agents.
-Uses a singleton pattern so all agents always read and write the same object.
+Supports structured proposals, clinical approvals, audit logging, and role-based changes.
 """
 
 from __future__ import annotations
 import json
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CarePlan dataclass
-# ─────────────────────────────────────────────────────────────────────────────
 @dataclass
 class CarePlan:
     """
     The shared, evolving care plan for a patient.
-    All three agents (Patient, Caregiver, Clinician) read and write this object.
+    All agents read this object, and propose or approve updates with audit tracking.
     """
 
     patient_id: str
     patient_name: str
 
-    # Goals are a dict of category -> target string
+    # Goals and Targets
     goals: Dict[str, Any] = field(default_factory=dict)
-
-    # Medications list of dicts
     medications: List[Dict[str, Any]] = field(default_factory=list)
-
-    # Vitals targets
     vitals_targets: Dict[str, str] = field(default_factory=dict)
 
-    # Recent events — list of event dicts {timestamp, event_type, description, severity}
+    # Schedules & Recommendations
+    monitoring_schedule: Dict[str, str] = field(default_factory=lambda: {
+        "blood_pressure": "Twice daily (Morning 8:00 AM & Evening 7:00 PM)",
+        "blood_glucose": "Daily fasting + 2 hrs post-lunch on alternate days",
+        "weight": "Weekly on Sunday morning",
+    })
+    activity_goals: Dict[str, Any] = field(default_factory=lambda: {
+        "daily_walk_minutes": 25,
+        "daily_water_glasses": 8,
+        "social_interaction_target_days": 5,
+    })
+    dietary_recommendations: List[str] = field(default_factory=lambda: [
+        "Sodium restriction < 2.0g per day (DASH diet principles)",
+        "Low glycaemic index carbohydrates; eliminate refined sugars",
+        "Increase soluble dietary fibre (methi seeds, oats, leafy vegetables)",
+    ])
+    appointment_schedule: List[Dict[str, Any]] = field(default_factory=lambda: [
+        {
+            "doctor": "Dr. Anjali Sharma",
+            "specialty": "Geriatrics & Chronic Care",
+            "hospital": "Apollo Hospital, Noida",
+            "day": 30,
+            "status": "scheduled",
+        }
+    ])
+    current_concerns: List[str] = field(default_factory=list)
+
+    # Proposals Audit Trail (Evolving Care Plan lifecycle)
+    proposals: List[Dict[str, Any]] = field(default_factory=list)
+
+    # Operational status & history
     recent_events: List[Dict[str, Any]] = field(default_factory=list)
-
-    # Last recorded vitals
     last_vitals: Dict[str, Any] = field(default_factory=dict)
-
-    # Timestamp of last update
     last_updated: str = field(default_factory=lambda: datetime.now().isoformat())
-
-    # Escalation level 0-3
     escalation_level: int = 0
-
-    # Escalation reason
     escalation_reason: str = ""
-
-    # Simulation day
     current_day: int = 0
-
-    # Doctor notes
-    doctor_notes: List[str] = field(default_factory=list)
-
-    # Caregiver alerts sent
+    doctor_notes: List[Dict[str, Any]] = field(default_factory=list)
     caregiver_alerts: List[Dict[str, Any]] = field(default_factory=list)
-
-    # Medication adherence % (rolling)
     medication_adherence_pct: float = 100.0
-
-    # Social wellbeing score 1-5
     social_wellbeing_score: float = 3.0
 
     # ─── Methods ───────────────────────────────────────────────────────────
@@ -80,10 +86,7 @@ class CarePlan:
         severity: str = "info",
         day: Optional[int] = None,
     ) -> None:
-        """
-        Append an event to recent_events.
-        severity: 'info' | 'warning' | 'critical'
-        """
+        """Append an event to recent_events audit trail."""
         event = {
             "timestamp": datetime.now().isoformat(),
             "day": day if day is not None else self.current_day,
@@ -95,32 +98,128 @@ class CarePlan:
         self.last_updated = datetime.now().isoformat()
 
     def escalate(self, level: int, reason: str) -> None:
-        """Raise (or lower) the escalation level with a reason."""
+        """Raise or lower the escalation level with an audit log."""
         old_level = self.escalation_level
         self.escalation_level = max(0, min(3, level))
         self.escalation_reason = reason
         self.last_updated = datetime.now().isoformat()
         self.add_event(
             event_type="ESCALATION_CHANGE",
-            description=f"Escalation changed from level {old_level} → {self.escalation_level}: {reason}",
-            severity="critical" if self.escalation_level >= 3 else "warning",
+            description=f"Escalation changed from level {old_level} -> {self.escalation_level}: {reason}",
+            severity="critical" if self.escalation_level >= 3 else ("warning" if self.escalation_level >= 1 else "info"),
         )
 
-    def add_doctor_note(self, note: str) -> None:
-        self.doctor_notes.append(
-            {"note": note, "timestamp": datetime.now().isoformat()}
+    def propose_update(
+        self,
+        agent_name: str,
+        category: str,
+        proposed_value: Any,
+        reason: str,
+        requires_clinical_approval: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Record a proposed care plan change.
+        If non-clinical (e.g. social reminder schedule), can be auto-approved or approved by caregiver.
+        """
+        proposal_id = f"prop_{uuid.uuid4().hex[:8]}"
+        old_val = None
+        if hasattr(self, category):
+            old_val = getattr(self, category)
+        elif category in self.goals:
+            old_val = self.goals[category]
+
+        proposal = {
+            "id": proposal_id,
+            "agent_name": agent_name,
+            "category": category,
+            "old_value": old_val,
+            "proposed_value": proposed_value,
+            "reason": reason,
+            "requires_clinical_approval": requires_clinical_approval,
+            "status": "pending_review",
+            "created_at": datetime.now().isoformat(),
+            "day": self.current_day,
+            "reviewer": None,
+            "reviewed_at": None,
+        }
+
+        # Auto-apply if it doesn't require clinician authorization
+        if not requires_clinical_approval:
+            proposal["status"] = "approved"
+            proposal["reviewer"] = agent_name
+            proposal["reviewed_at"] = datetime.now().isoformat()
+            self._apply_approved_update(category, proposed_value)
+
+        self.proposals.append(proposal)
+        self.add_event(
+            event_type="CARE_PLAN_PROPOSAL",
+            description=f"[{agent_name}] Proposed change to '{category}': {reason} (Status: {proposal['status']})",
+            severity="info",
         )
+        self.last_updated = datetime.now().isoformat()
+        return proposal
+
+    def approve_proposal(self, proposal_id: str, reviewer_role: str = "clinician") -> bool:
+        """Authorize and apply a care plan update proposal."""
+        for prop in self.proposals:
+            if prop["id"] == proposal_id and prop["status"] == "pending_review":
+                # Verify clinical authorization role
+                if prop["requires_clinical_approval"] and reviewer_role not in ["clinician", "doctor", "admin"]:
+                    raise PermissionError("Clinical approval required for medication or target alterations.")
+
+                prop["status"] = "approved"
+                prop["reviewer"] = reviewer_role
+                prop["reviewed_at"] = datetime.now().isoformat()
+                self._apply_approved_update(prop["category"], prop["proposed_value"])
+                self.add_event(
+                    event_type="CARE_PLAN_APPROVED",
+                    description=f"Care plan proposal '{proposal_id}' ({prop['category']}) approved by {reviewer_role}",
+                    severity="info",
+                )
+                self.last_updated = datetime.now().isoformat()
+                return True
+        return False
+
+    def reject_proposal(self, proposal_id: str, reviewer_role: str, reason: str = "") -> bool:
+        """Reject a proposed care plan change."""
+        for prop in self.proposals:
+            if prop["id"] == proposal_id and prop["status"] == "pending_review":
+                prop["status"] = "rejected"
+                prop["reviewer"] = reviewer_role
+                prop["rejection_reason"] = reason
+                prop["reviewed_at"] = datetime.now().isoformat()
+                self.add_event(
+                    event_type="CARE_PLAN_REJECTED",
+                    description=f"Proposal '{proposal_id}' rejected by {reviewer_role}: {reason}",
+                    severity="info",
+                )
+                self.last_updated = datetime.now().isoformat()
+                return True
+        return False
+
+    def _apply_approved_update(self, category: str, new_value: Any) -> None:
+        """Internal helper to apply approved change to state."""
+        if hasattr(self, category):
+            setattr(self, category, new_value)
+        elif category in self.goals:
+            self.goals[category] = new_value
+
+    def add_doctor_note(self, note: str, author: str = "Dr. Anjali Sharma") -> None:
+        self.doctor_notes.append({
+            "note": note,
+            "author": author,
+            "timestamp": datetime.now().isoformat(),
+            "day": self.current_day,
+        })
         self.last_updated = datetime.now().isoformat()
 
     def add_caregiver_alert(self, message: str, urgency: str) -> None:
-        self.caregiver_alerts.append(
-            {
-                "message": message,
-                "urgency": urgency,
-                "timestamp": datetime.now().isoformat(),
-                "day": self.current_day,
-            }
-        )
+        self.caregiver_alerts.append({
+            "message": message,
+            "urgency": urgency,
+            "timestamp": datetime.now().isoformat(),
+            "day": self.current_day,
+        })
 
     def update_adherence(self, adherence_pct: float) -> None:
         self.medication_adherence_pct = round(adherence_pct, 1)
@@ -131,14 +230,20 @@ class CarePlan:
         self.last_updated = datetime.now().isoformat()
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize to a plain dictionary (JSON-serialisable)."""
+        """Serialize to a JSON-compatible dictionary."""
         return {
             "patient_id": self.patient_id,
             "patient_name": self.patient_name,
             "goals": self.goals,
             "medications": self.medications,
             "vitals_targets": self.vitals_targets,
-            "recent_events": self.recent_events[-20:],  # Last 20 events
+            "monitoring_schedule": self.monitoring_schedule,
+            "activity_goals": self.activity_goals,
+            "dietary_recommendations": self.dietary_recommendations,
+            "appointment_schedule": self.appointment_schedule,
+            "current_concerns": self.current_concerns,
+            "proposals": self.proposals,
+            "recent_events": self.recent_events[-30:],
             "last_vitals": self.last_vitals,
             "last_updated": self.last_updated,
             "escalation_level": self.escalation_level,
@@ -150,71 +255,42 @@ class CarePlan:
             "social_wellbeing_score": self.social_wellbeing_score,
         }
 
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CarePlan":
-        """Deserialize from a plain dictionary."""
-        cp = cls(
-            patient_id=data["patient_id"],
-            patient_name=data["patient_name"],
-        )
-        cp.goals = data.get("goals", {})
-        cp.medications = data.get("medications", [])
-        cp.vitals_targets = data.get("vitals_targets", {})
-        cp.recent_events = data.get("recent_events", [])
-        cp.last_vitals = data.get("last_vitals", {})
-        cp.last_updated = data.get("last_updated", datetime.now().isoformat())
-        cp.escalation_level = data.get("escalation_level", 0)
-        cp.escalation_reason = data.get("escalation_reason", "")
-        cp.current_day = data.get("current_day", 0)
-        cp.doctor_notes = data.get("doctor_notes", [])
-        cp.caregiver_alerts = data.get("caregiver_alerts", [])
-        cp.medication_adherence_pct = data.get("medication_adherence_pct", 100.0)
-        cp.social_wellbeing_score = data.get("social_wellbeing_score", 3.0)
-        return cp
-
-    def to_json(self) -> str:
-        return json.dumps(self.to_dict(), indent=2, ensure_ascii=False)
-
-    def get_critical_events(self) -> List[Dict[str, Any]]:
-        """Return only critical/warning events."""
-        return [e for e in self.recent_events if e["severity"] in ("warning", "critical")]
-
     def summary_str(self) -> str:
-        """One-line summary for logging."""
+        last_bp = f"{self.last_vitals.get('bp_systolic', '?')}/{self.last_vitals.get('bp_diastolic', '?')}"
+        last_gluc = str(self.last_vitals.get("blood_glucose", "?"))
+        pending = len([p for p in self.proposals if p["status"] == "pending_review"])
         return (
             f"[Day {self.current_day}] Escalation={self.escalation_level} | "
-            f"BP={self.last_vitals.get('bp_systolic','?')}/{self.last_vitals.get('bp_diastolic','?')} | "
-            f"Glucose={self.last_vitals.get('blood_glucose','?')} | "
+            f"BP={last_bp} | Glucose={last_gluc} | "
             f"Adherence={self.medication_adherence_pct}% | "
-            f"Social={self.social_wellbeing_score}/5"
+            f"Social={self.social_wellbeing_score}/5 | "
+            f"Pending Proposals={pending}"
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Singleton accessor
-# ─────────────────────────────────────────────────────────────────────────────
-_care_plan_instance: Optional[CarePlan] = None
+_shared_care_plan: Optional[CarePlan] = None
 
 
-def get_care_plan() -> Optional[CarePlan]:
-    """Return the singleton CarePlan instance (None until initialized)."""
-    return _care_plan_instance
+def get_care_plan() -> CarePlan:
+    global _shared_care_plan
+    if _shared_care_plan is None:
+        _shared_care_plan = initialize_care_plan("patient_001", "Ramesh Kumar")
+    return _shared_care_plan
 
 
 def initialize_care_plan(
     patient_id: str,
     patient_name: str,
-    goals: Dict[str, Any],
-    medications: List[Dict[str, Any]],
-    vitals_targets: Dict[str, str],
+    goals: Optional[Dict[str, Any]] = None,
+    medications: Optional[List[Dict[str, Any]]] = None,
+    vitals_targets: Optional[Dict[str, str]] = None,
 ) -> CarePlan:
-    """Create and register the singleton CarePlan."""
-    global _care_plan_instance
-    _care_plan_instance = CarePlan(
+    global _shared_care_plan
+    _shared_care_plan = CarePlan(
         patient_id=patient_id,
         patient_name=patient_name,
-        goals=goals,
-        medications=medications,
-        vitals_targets=vitals_targets,
+        goals=goals or {},
+        medications=medications or [],
+        vitals_targets=vitals_targets or {},
     )
-    return _care_plan_instance
+    return _shared_care_plan

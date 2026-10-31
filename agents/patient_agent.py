@@ -1,12 +1,13 @@
 """
 agents/patient_agent.py
-Patient Agent — the primary interface with the patient.
-Handles multilingual check-ins, medicine tracking, vitals logging,
-mood/social analysis, and isolation detection.
+Patient Agent (Asha) — the primary conversational interface with the elderly patient.
+Handles proactive multilingual check-ins (Hindi, Marathi, English), medicine tracking,
+vitals logging, symptom triage, memory-informed dialogue, and voice interaction.
 """
 
 from __future__ import annotations
 import logging
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from agents.base_agent import BaseAgent
@@ -27,9 +28,9 @@ logger = logging.getLogger(__name__)
 
 class PatientAgent(BaseAgent):
     """
-    The Patient Agent proactively checks in with the patient,
-    tracks medicines/vitals, analyses mood and social signals,
-    and fires events on the shared event bus.
+    Asha proactively checks in with the patient on schedule,
+    communicates in preferred languages (Hindi, Marathi, English),
+    logs vitals and symptoms into longitudinal memory, and adapts to responses.
     """
 
     def __init__(
@@ -52,30 +53,23 @@ class PatientAgent(BaseAgent):
         self.isolation_threshold = AGENT_CONFIG["patient_agent"]["isolation_threshold_days"]
         self._checkin_count = 0
 
-    # ─── Main Entry Point ──────────────────────────────────────────────────
+    # ─── Main Daily Check-in Runner ────────────────────────────────────────
 
     def run_check_in(self, patient_data: Dict[str, Any]) -> str:
         """
-        Called by DemoRunner for each simulation day.
-        Decides channel, conducts check-in, analyses response, logs everything.
+        Executes daily scheduled check-in.
+        Selects voice/WhatsApp channel, logs metrics, and fires events.
         """
         day = patient_data.get("day", 0)
         self.care_plan.current_day = day
         self._checkin_count += 1
 
-        # Decide whether to use voice or WhatsApp based on day/risk
         use_voice = self._should_use_voice(patient_data)
-
-        # Build and deliver the check-in message
         checkin_message = self.conduct_checkin(patient_data)
-
-        # Simulate patient response (from simulation data)
         simulated_response = self._simulate_patient_response(patient_data)
-
-        # Analyse response for mood, adherence, social signals
         analysis = self.analyze_response(simulated_response, patient_data)
 
-        # Log vitals into memory
+        # Log vitals into longitudinal memory
         self.memory.log_vitals(
             patient_id=self.patient_id,
             day=day,
@@ -88,7 +82,7 @@ class PatientAgent(BaseAgent):
             activity_minutes=patient_data.get("activity_minutes", 30),
         )
 
-        # Log check-in
+        # Log checkin record
         self.memory.log_checkin(
             patient_id=self.patient_id,
             day=day,
@@ -98,10 +92,10 @@ class PatientAgent(BaseAgent):
             symptoms=patient_data.get("symptoms", []),
             notes=simulated_response,
             agent_response=checkin_message,
-            language=PATIENT_PROFILE["primary_language"],
+            language=PATIENT_PROFILE.get("primary_language", "Hindi"),
         )
 
-        # Log medication adherence
+        # Log medications
         med_taken = patient_data.get("medication_taken", True)
         for slot, meds in MEDICATION_SCHEDULE.items():
             for med in meds:
@@ -125,7 +119,7 @@ class PatientAgent(BaseAgent):
             mood_after=analysis["mood"],
         )
 
-        # Update care plan
+        # Update shared care plan state
         self.care_plan.update_vitals(patient_data)
         adherence_stats = self.memory.get_medication_adherence(self.patient_id, days=day)
         self.care_plan.update_adherence(adherence_stats["adherence_pct"])
@@ -133,16 +127,19 @@ class PatientAgent(BaseAgent):
         social_score = max(1.0, 5.0 - social_summary["isolation_days"])
         self.care_plan.update_social_score(social_score)
 
-        # Publish events
+        # Publish coordination events
         self._fire_events(day, patient_data, analysis)
 
-        # Detect isolation
-        isolation = self.detect_isolation(
-            self.memory.get_social_summary(self.patient_id, days=self.isolation_threshold)
+        # Publish CHECKIN_COMPLETED for RiskAnalysisAgent and SocialWellbeingAgent
+        self.event_bus.publish(
+            event_type=EventType.CHECKIN_COMPLETED,
+            data=patient_data,
+            source=self.name,
+            day=day,
         )
 
         summary = (
-            f"[Day {day}] Check-in via {'📞 Voice' if use_voice else '💬 WhatsApp'} | "
+            f"[Day {day}] Check-in via {'📞 Voice Call' if use_voice else '💬 WhatsApp'} | "
             f"Mood: {analysis['mood']}/5 | "
             f"Meds: {'✅' if med_taken else '❌ MISSED'} | "
             f"Social: {'✅' if social else '⚠️ Isolated'} | "
@@ -151,275 +148,151 @@ class PatientAgent(BaseAgent):
         )
         return summary
 
-    # ─── Check-in Conversation ─────────────────────────────────────────────
+    # ─── Multilingual Interactive Chat (Voice / Text) ──────────────────────
 
-    def initiate_checkin(self, day: int, patient_data: Dict[str, Any]) -> bool:
+    def chat(self, user_message: str, language: Optional[str] = None) -> Dict[str, Any]:
         """
-        Decide whether to proactively initiate a check-in.
-        Returns True if check-in was initiated.
+        Interactive conversational interface used by web patient portal and voice assistant.
+        Retrieves longitudinal memory context first before responding.
         """
-        # Always check in; increase frequency when escalation level is high
-        if self.care_plan.escalation_level >= 2:
-            return True
-        return True  # Daily check-ins always on for demo
+        lang = self.lang_handler._normalize_language(language or PATIENT_PROFILE.get("primary_language", "Hindi"))
+        context = self.memory.get_context_for_agent(self.patient_id)
+        msg_lower = user_message.lower()
 
-    def conduct_checkin(self, patient_data: Dict[str, Any]) -> str:
-        """
-        Build a personalised multilingual check-in message using Gemini (or fallback).
-        Returns the message sent to the patient.
-        """
-        day = patient_data.get("day", 0)
-        language = PATIENT_PROFILE["primary_language"]
-        time_of_day = "morning" if day % 3 == 0 else ("afternoon" if day % 3 == 1 else "evening")
+        # Check for urgent symptom complaints
+        symptoms_detected = []
+        for sym in ["chest pain", "सीने में दर्द", "छातीत दुखणे", "dizziness", "चक्कर", "headache", "सिरदर्द", "डोकेदुखी", "breathlessness", "सांस फूलना"]:
+            if sym in msg_lower:
+                symptoms_detected.append(sym)
 
-        # Use Gemini for richer messages when available
-        context = {
-            "task": "Generate a warm, personalised check-in message for the patient",
-            "day": day,
-            "language": language,
-            "time_of_day": time_of_day,
-            "bp": f"{patient_data.get('bp_systolic')}/{patient_data.get('bp_diastolic')} mmHg",
-            "glucose_yesterday": f"{patient_data.get('blood_glucose')} mg/dL",
-            "medication_taken_yesterday": patient_data.get("medication_taken", True),
-            "escalation_level": self.care_plan.escalation_level,
-            "include_hindi_greeting": True,
-            "symptoms_reported": patient_data.get("symptoms", []),
-        }
-
+        # Generate contextual prompt if Gemini available
         if self._llm_available:
-            prompt = self._build_patient_prompt(context)
-            message = self._call_llm(prompt)
+            prompt = f"""You are Asha, a warm elderly-care AI companion for {self.patient_name} (78M, Hypertension + T2 Diabetes).
+Patient language preference: {lang}.
+Patient context:
+- 7-day Systolic BP Avg: {context.get('bp_systolic_7d_avg')} mmHg (Trend: {context.get('bp_trend_direction')})
+- Medication Adherence: {context.get('adherence_7d_pct')}%
+- Recent symptoms: {context.get('recent_symptoms')}
+- Current Escalation Level: {self.care_plan.escalation_level}/3
+
+User message: "{user_message}"
+
+Instructions:
+1. Respond with warmth, respect, and clear reassurance in {lang} (use Devanagari script for Hindi/Marathi, with English translation in parentheses).
+2. If patient reports chest pain, extreme dizziness or breathlessness, urge them to sit immediately and state that Suresh and doctor are notified.
+3. Keep response concise (under 75 words).
+"""
+            reply = self._call_llm(prompt)
         else:
-            message = self._template_checkin(patient_data, language, time_of_day)
+            # High-quality deterministic fallback
+            reply = self._get_fallback_chat_reply(msg_lower, lang, context)
 
-        return message
-
-    def _build_patient_prompt(self, context: Dict[str, Any]) -> str:
-        """Build a detailed Gemini prompt for the patient check-in."""
-        symptoms_str = ", ".join(context.get("symptoms_reported", [])) or "none reported"
-        med_status = "Yes ✓" if context.get("medication_taken_yesterday") else "No — MISSED ✗"
-        escalation = context.get("escalation_level", 0)
-
-        return f"""
-You are Asha, a warm, caring AI health companion for elderly patients in India.
-You are calling Ramesh Kumar (78 years old) for his daily health check-in.
-He prefers Hindi but also understands English.
-
-CURRENT HEALTH STATUS:
-- Day of monitoring: {context['day']}
-- BP yesterday: {context['bp']}
-- Blood glucose: {context['glucose_yesterday']}
-- Medications taken yesterday: {med_status}
-- Symptoms reported: {symptoms_str}
-- Escalation level: {escalation}/3
-
-TASK: Write a warm, friendly {context['time_of_day']} check-in message in HINGLISH 
-(mix of Hindi in Devanagari script and English) that:
-1. Greets him appropriately for {context['time_of_day']}
-2. Asks how he's feeling
-3. Reminds him to take his medicines {'(GENTLE REMINDER - he missed yesterday)' if not context.get('medication_taken_yesterday') else ''}
-4. Asks about his BP and sugar readings
-5. Asks if he's had any social interaction today
-{'6. Gently expresses concern about his rising vitals' if escalation >= 2 else ''}
-
-Keep it under 100 words. Be like a caring family member, not a robot.
-Start with a Hindi greeting in Devanagari.
-""".strip()
-
-    def _template_checkin(
-        self, patient_data: Dict, language: str, time_of_day: str
-    ) -> str:
-        """Template-based check-in message (Gemini fallback)."""
-        greeting = self.lang_handler.get_greeting(language, time_of_day)
-        med_reminder = ""
-        if not patient_data.get("medication_taken", True):
-            med_reminder = self.lang_handler.get_medication_reminder(
-                language, "Amlodipine, Metformin"
+        # Trigger event if danger symptoms mentioned
+        if any(k in msg_lower for k in ["chest", "सीने", "छातीत"]):
+            self.event_bus.publish(
+                event_type=EventType.EMERGENCY_TRIGGERED,
+                data={"symptom": "chest pain", "message": user_message},
+                source=self.name,
+                day=self.care_plan.current_day,
             )
-        symptoms = patient_data.get("symptoms", [])
-        symptoms_str = f"Symptoms noted: {', '.join(symptoms)}." if symptoms else ""
-
-        return (
-            f"{greeting}\n"
-            f"Ramesh ji, aaj kaisa mahsoos ho raha hai? {symptoms_str} "
-            f"Kya aapne BP aur sugar check kiya? "
-            f"{med_reminder} "
-            f"Aur aaj kisi se baat hui? Parivaar mein sab theek? "
-            f"\n(How are you feeling today? {symptoms_str} "
-            f"Did you check your BP and sugar? {med_reminder} "
-            f"Did you talk to anyone today? All well at home?)"
-        ).strip()
-
-    # ─── Response Analysis ─────────────────────────────────────────────────
-
-    def analyze_response(
-        self, response: str, vitals: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Extract mood, energy, pain level from simulated patient response and vitals.
-        Returns a dict with extracted signals.
-        """
-        mood = vitals.get("mood", 3)
-        symptoms = vitals.get("symptoms", [])
-        pain_level = 3 if "pain" in symptoms else (2 if "chest pain" in symptoms else 1)
-        energy = max(1, min(5, mood - (1 if len(symptoms) > 2 else 0)))
-
-        # Detect social isolation signal from response text
-        isolation_keywords = ["alone", "akela", "koi nahi", "bored", "lonely"]
-        isolation_hinted = any(kw in response.lower() for kw in isolation_keywords)
 
         return {
-            "mood": mood,
-            "energy": energy,
-            "pain_level": pain_level,
-            "isolation_hinted": isolation_hinted,
-            "symptoms_count": len(symptoms),
-            "raw_response": response,
+            "reply": reply,
+            "language": lang,
+            "symptoms_detected": symptoms_detected,
+            "escalation_level": self.care_plan.escalation_level,
         }
 
-    def _simulate_patient_response(self, patient_data: Dict[str, Any]) -> str:
-        """Generate a realistic simulated patient response for the demo."""
-        mood = patient_data.get("mood", 3)
-        symptoms = patient_data.get("symptoms", [])
-        social = patient_data.get("social_interaction", True)
-        med_taken = patient_data.get("medication_taken", True)
-        day = patient_data.get("day", 1)
+    def _get_fallback_chat_reply(self, msg_lower: str, lang: str, context: Dict[str, Any]) -> str:
+        if any(k in msg_lower for k in ["chest", "सीने में दर्द", "छातीत"]):
+            if lang == "Marathi":
+                return "⚠️ रमेश जी, छातीत दुखणे गंभीर लक्षण असू शकते! कृपया त्वरित बसा आणि पाणी प्या। मी सुरेश यांना तात्काळ सूचना दिली आहे।"
+            elif lang == "Hindi":
+                return "⚠️ रमेश जी, सीने में दर्द गंभीर हो सकता है! कृपया तुरंत बैठ जाएं। मैंने सुरेश और डॉक्टर को आपातकालीन अलर्ट भेज दिया है।"
+            return "⚠️ Ramesh ji, chest pain can be serious! Please sit down immediately. I have notified Suresh and Dr. Sharma."
 
-        if mood >= 4 and not symptoms:
-            response = (
-                "Haan Asha beti, aaj theek hoon. Subah walk bhi ki. "
-                f"BP check kiya — {patient_data.get('bp_systolic')}/{patient_data.get('bp_diastolic')} aaya. "
-                "Dawai bhi le li. Beta ka phone bhi aaya tha."
-            )
-        elif mood == 3 and len(symptoms) <= 1:
-            response = (
-                f"Theek hoon, bas thoda thaka hua hoon. "
-                f"BP {patient_data.get('bp_systolic')} raha aaj. "
-                f"{'Dawai le li.' if med_taken else 'Dawai bhool gayi subah.'}"
-            )
-        elif mood <= 2 or len(symptoms) >= 2:
-            sym_str = ", ".join(symptoms) if symptoms else "sir dard"
-            response = (
-                f"Nahi theek nahi hoon. {sym_str} ho raha hai. "
-                f"BP bhi zyada lag raha hai — {patient_data.get('bp_systolic')} aaya. "
-                f"{'Dawai nahi li.' if not med_taken else 'Dawai li.'} "
-                f"{'Koi aaya nahi aaj.' if not social else 'Suresh aa gaya tha.'}"
-            )
-        else:
-            response = (
-                f"Asha, aaj thoda uncomfortable hoon. "
-                f"Sugar {patient_data.get('blood_glucose')} aayi. "
-                f"{'Akela mehsoos ho raha hoon.' if not social else 'Pooja ji se baat ki.'}"
-            )
+        if any(k in msg_lower for k in ["चक्कर", "dizzy", "headache", "सिरदर्द", "डोके"]):
+            if lang == "Marathi":
+                return "रमेश जी, चक्कर किंवा डोकेदुखी रक्तदाब वाढल्याचे लक्षण असू शकते। शांत बसा आणि विश्रांती घ्या। आजची औषधे घेतली आहेत का?"
+            elif lang == "Hindi":
+                return "रमेश जी, चक्कर या सिरदर्द बीपी बढ़ने का संकेत हो सकता है। कृपया आराम से बैठें, पानी पिएं और अपना बीपी चेक करें।"
+            return "Ramesh ji, dizziness or headache can indicate elevated blood pressure. Please rest and check your BP."
 
-        return response
+        if any(k in msg_lower for k in ["दवाई", "औषध", "medicine", "tablet"]):
+            if lang == "Marathi":
+                return "💊 रमेश जी, तुमची सकाळची औषधे (Amlodipine आणि Metformin) अत्यंत महत्त्वाची आहेत। कृपया नियमित वेळेवर घ्या।"
+            elif lang == "Hindi":
+                return "💊 रमेश जी, आपकी बीपी और शुगर की दवाइयाँ नियमित लेना बहुत ज़रूरी है। कृपया समय पर खुराक लें।"
+            return "💊 Ramesh ji, taking your prescribed BP and diabetes medications on time is essential for your stability."
 
-    # ─── Isolation Detection ───────────────────────────────────────────────
+        if any(k in msg_lower for k in ["नमस्ते", "नमस्कार", "hello", "hi", "प्रणाम"]):
+            return self.lang_handler.get_greeting(lang, "morning") + " रमेश जी, आज कशी प्रकृती आहे? / आज कैसा महसूस हो रहा है?"
 
-    def detect_isolation(self, social_summary: Dict[str, Any]) -> bool:
-        """
-        Check if patient has been socially isolated.
-        Publishes SOCIAL_ISOLATION_DETECTED if isolation is detected.
-        Returns True if isolation detected.
-        """
-        isolation_days = social_summary.get("isolation_days", 0)
-        total_days = social_summary.get("total_days", 1)
+        return "धन्यवाद रमेश जी! 🙏 मी ही नोंद तुमच्या आरोग्य पुस्तिकेत ठेवली आहे। काळजी घ्या आणि नियमित पाणी प्या!"
 
-        if isolation_days >= self.isolation_threshold or (
-            total_days >= 5 and social_summary.get("isolation_pct", 0) >= 60
-        ):
-            day = self.care_plan.current_day
-            self.event_bus.publish(
-                event_type=EventType.SOCIAL_ISOLATION_DETECTED,
-                data={
-                    "patient_name": self.patient_name,
-                    "isolation_days": isolation_days,
-                    "total_days_checked": total_days,
-                    "isolation_pct": social_summary.get("isolation_pct", 0),
-                    "message": (
-                        f"{self.patient_name} has had no social interaction for "
-                        f"{isolation_days} of the last {total_days} days."
-                    ),
-                },
-                source=self.name,
-                day=day,
-            )
-            self.care_plan.add_event(
-                event_type="SOCIAL_ISOLATION",
-                description=f"Social isolation detected: {isolation_days}/{total_days} days without interaction.",
-                severity="warning",
-            )
-            logger.warning(f"[{self.name}] Social isolation detected: {isolation_days} days.")
-            return True
-        return False
-
-    # ─── Event Publishing ──────────────────────────────────────────────────
-
-    def _fire_events(
-        self,
-        day: int,
-        patient_data: Dict[str, Any],
-        analysis: Dict[str, Any],
-    ) -> None:
-        """Evaluate vitals and publish appropriate events."""
-        bp_sys = patient_data.get("bp_systolic", 130)
-        bp_dia = patient_data.get("bp_diastolic", 85)
-        glucose = patient_data.get("blood_glucose", 150)
-        hr = patient_data.get("heart_rate", 72)
-        med_taken = patient_data.get("medication_taken", True)
-
-        thresholds = VITAL_THRESHOLDS
-
-        # BP check
-        if bp_sys >= thresholds["bp_systolic"]["danger_high"] or bp_sys <= thresholds["bp_systolic"]["danger_low"]:
-            self._publish_vitals_alert(day, "bp_systolic", bp_sys, "DANGER")
-        elif bp_sys >= thresholds["bp_systolic"]["warning_high"]:
-            self._publish_vitals_alert(day, "bp_systolic", bp_sys, "WARNING")
-
-        # Glucose check
-        if glucose >= thresholds["blood_glucose"]["danger_high"]:
-            self._publish_vitals_alert(day, "blood_glucose", glucose, "DANGER")
-        elif glucose >= thresholds["blood_glucose"]["warning_high"]:
-            self._publish_vitals_alert(day, "blood_glucose", glucose, "WARNING")
-
-        # Heart rate
-        if hr >= thresholds["heart_rate"]["danger_high"] or hr <= thresholds["heart_rate"]["danger_low"]:
-            self._publish_vitals_alert(day, "heart_rate", hr, "DANGER")
-
-        # Medication missed
-        if not med_taken:
-            self.event_bus.publish(
-                event_type=EventType.MEDICATION_MISSED,
-                data={
-                    "patient_name": self.patient_name,
-                    "day": day,
-                    "message": f"{self.patient_name} did not take medications on day {day}.",
-                },
-                source=self.name,
-                day=day,
-            )
-
-    def _publish_vitals_alert(
-        self, day: int, metric: str, value: float, severity: str
-    ) -> None:
-        self.event_bus.publish(
-            event_type=EventType.VITALS_ALERT,
-            data={
-                "patient_name": self.patient_name,
-                "metric": metric,
-                "value": value,
-                "severity": severity,
-                "day": day,
-                "message": f"{severity}: {metric}={value} on day {day}",
-            },
-            source=self.name,
-            day=day,
-        )
+    # ─── Channel & Proactivity Helpers ─────────────────────────────────────
 
     def _should_use_voice(self, patient_data: Dict[str, Any]) -> bool:
-        """Voice call if escalation high or mood low; WhatsApp otherwise."""
-        return (
-            self.care_plan.escalation_level >= 2
-            or patient_data.get("mood", 3) <= 2
-            or not patient_data.get("medication_taken", True)
-        )
+        """Use voice call for critical days or low mood to ensure elderly accessibility."""
+        day = patient_data.get("day", 0)
+        mood = patient_data.get("mood", 3)
+        bp_sys = patient_data.get("bp_systolic", 130)
+        return day in [22, 28] or mood <= 2 or bp_sys >= 165
+
+    def conduct_checkin(self, patient_data: Dict[str, Any]) -> str:
+        day = patient_data.get("day", 0)
+        lang = PATIENT_PROFILE.get("primary_language", "Hindi")
+        time_of_day = "morning" if day % 2 == 0 else "evening"
+
+        if not patient_data.get("medication_taken", True):
+            return self.lang_handler.get_medication_reminder(lang, "Amlodipine 5mg & Metformin")
+        return self.lang_handler.get_checkin_message(lang, self.patient_name)
+
+    def _simulate_patient_response(self, patient_data: Dict[str, Any]) -> str:
+        symptoms = patient_data.get("symptoms", [])
+        med_taken = patient_data.get("medication_taken", True)
+        if symptoms:
+            return f"Aaj thoda {', '.join(symptoms)} lag raha hai."
+        if not med_taken:
+            return "Subah dawai lena bhool gaya tha."
+        return "Sab theek hai, BP check kar liya hai."
+
+    def analyze_response(self, response_text: str, patient_data: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "mood": patient_data.get("mood", 3),
+            "energy": 3 if patient_data.get("mood", 3) >= 3 else 2,
+            "pain_level": 5 if "chest" in response_text else (2 if "headache" in response_text else 0),
+        }
+
+    def _fire_events(self, day: int, patient_data: Dict[str, Any], analysis: Dict[str, Any]) -> None:
+        bp_sys = patient_data.get("bp_systolic", 130)
+        gluc = patient_data.get("blood_glucose", 140)
+
+        # Vital alert
+        if bp_sys >= VITAL_THRESHOLDS["bp_systolic"]["warning_high"] or gluc >= VITAL_THRESHOLDS["blood_glucose"]["warning_high"]:
+            self.event_bus.publish(
+                event_type=EventType.VITALS_ALERT,
+                data=patient_data,
+                source=self.name,
+                day=day,
+            )
+
+        # Medication missed
+        if not patient_data.get("medication_taken", True):
+            self.event_bus.publish(
+                event_type=EventType.MEDICATION_MISSED,
+                data={"day": day, "patient_name": self.patient_name},
+                source=self.name,
+                day=day,
+            )
+
+        # Social isolation
+        if not patient_data.get("social_interaction", True):
+            social_summary = self.memory.get_social_summary(self.patient_id, days=self.isolation_threshold)
+            if social_summary["isolation_days"] >= self.isolation_threshold:
+                self.event_bus.publish(
+                    event_type=EventType.SOCIAL_ISOLATION_DETECTED,
+                    data={"isolation_days": social_summary["isolation_days"]},
+                    source=self.name,
+                    day=day,
+                )

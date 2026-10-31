@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Caregiver Portal — CareSync AI</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="dashboard.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    /* Caregiver Layout Styling Matching Dashboard Theme */
+    .caregiver-hero {
+      background: linear-gradient(135deg, rgba(79, 142, 247, 0.1) 0%, rgba(124, 58, 237, 0.15) 100%);
+      border: 1px solid rgba(79, 142, 247, 0.2);
+      border-radius: var(--r-lg);
+      padding: 30px 34px;
+      margin-bottom: 24px;
+      box-shadow: var(--shadow-sm);
+    }
+    .privacy-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(79, 142, 247, 0.12);
+      border: 1px solid rgba(79, 142, 247, 0.3);
+      color: var(--blue);
+      padding: 4px 12px;
+      border-radius: 100px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    .cg-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 24px;
+      margin-top: 24px;
+    }
+    @media (max-width: 992px) {
+      .cg-grid { grid-template-columns: 1fr; }
+    }
+
+    .alert-card-item {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--red);
+      border-radius: var(--r-md);
+      padding: 18px 20px;
+      margin-bottom: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      transition: all 0.2s;
+    }
+    .alert-card-item.warning { border-left-color: var(--amber); }
+    .alert-card-item.info { border-left-color: var(--blue); }
+    .alert-card-item:hover {
+      border-color: var(--border-2);
+      background: var(--bg-card-2);
+    }
+
+    .btn-ack {
+      background: var(--grad-brand);
+      color: #FFFFFF;
+      border: none;
+      border-radius: var(--r-sm);
+      padding: 9px 18px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.2s var(--ease);
+      box-shadow: var(--shadow-blue);
+    }
+    .btn-ack:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(79, 142, 247, 0.4);
+    }
+
+    /* Modal for acknowledgment */
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(10, 13, 20, 0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-backdrop.active { display: flex; }
+    .modal-content {
+      background: var(--bg-card);
+      border: 1px solid var(--border-2);
+      border-radius: var(--r-lg);
+      padding: 30px;
+      max-width: 500px;
+      width: 90%;
+      box-shadow: var(--shadow-lg);
+      color: var(--text);
+    }
+    .modal-content h3 { margin-top: 0; font-size: 20px; color: var(--text); }
+    .form-group { margin-bottom: 16px; }
+    .form-group label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 13px; color: var(--text-muted); }
+    .form-group select, .form-group textarea {
+      width: 100%;
+      padding: 11px 14px;
+      background: var(--bg-2);
+      border: 1px solid var(--border-2);
+      border-radius: var(--r-sm);
+      font-size: 14px;
+      color: var(--text);
+      box-sizing: border-box;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .form-group select:focus, .form-group textarea:focus {
+      border-color: var(--blue);
+    }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      margin-top: 22px;
+    }
+
+    /* Action history log */
+    .action-timeline {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .action-entry {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--green);
+      padding: 14px 18px;
+      border-radius: 0 var(--r-sm) var(--r-sm) 0;
+      font-size: 14px;
+    }
+    .action-entry strong { color: var(--text); display: block; margin-bottom: 3px; font-size: 14px; }
+    .action-entry p { color: var(--text-muted); font-size: 13px; margin: 3px 0; }
+    .action-entry span { color: var(--text-dim); font-size: 12px; }
+
+    /* WhatsApp preview simulator inside dark theme */
+    .wa-mock-box {
+      background: #0E1626;
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      overflow: hidden;
+    }
+    .wa-bubble {
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      border-radius: var(--r-sm);
+      padding: 12px 16px;
+      font-size: 13px;
+      color: var(--text);
+      margin-bottom: 12px;
+      line-height: 1.5;
+    }
+    .wa-status {
+      font-size: 11px;
+      color: var(--green);
+      text-align: right;
+      margin-top: 6px;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body class="db-body">
+
+  <!-- ── Top Navigation Bar ────────────────────────────────────────── -->
+  <header class="topbar">
+    <div class="topbar__left">
+      <a href="index.html" class="nav__logo topbar__logo">
+        <span class="nav__logo-icon">
+          <svg width="24" height="24" viewBox="0 0 28 28" fill="none">
+            <circle cx="14" cy="14" r="14" fill="url(#tGrad)"/>
+            <path d="M8 14h3l2-5 3 10 2-7 2 4h3" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            <defs><linearGradient id="tGrad" x1="0" y1="0" x2="28" y2="28"><stop stop-color="#4F8EF7"/><stop offset="1" stop-color="#7C3AED"/></linearGradient></defs>
+          </svg>
+        </span>
+        <span>CareSync <span class="accent">AI</span></span>
+      </a>
+      <span class="topbar__divider"></span>
+      <span class="topbar__title">Caregiver Hub</span>
+    </div>
+
+    <!-- Navigation Hub Pills -->
+    <div class="topbar__center">
+      <div class="phase-pills">
+        <a href="index.html" class="phase-pill">🏠 Home</a>
+        <a href="patient.html" class="phase-pill">🧓 Patient View</a>
+        <a href="caregiver.html" class="phase-pill active">👨‍👩‍👦 Caregiver (Suresh)</a>
+        <a href="dashboard.html" class="phase-pill">🩺 Doctor View</a>
+        <a href="demo.html" class="phase-pill">🤖 Multi-Agent Live Studio</a>
+      </div>
+    </div>
+
+    <div class="topbar__right">
+      <span class="badge badge--green">Logged in: Suresh Kumar (Son)</span>
+    </div>
+  </header>
+
+  <!-- ── Sub Navigation Hub ────────────────────────────────────────── -->
+  <div style="background:var(--bg-2); border-bottom:1px solid var(--border); padding:10px 24px; display:flex; justify-content:space-between; align-items:center; font-size:13px; flex-wrap:wrap; gap:10px; margin-top:60px;">
+    <div style="display:flex; gap:16px; align-items:center;">
+      <a href="index.html" style="color:var(--text-muted); text-decoration:none; font-weight:600;">🏠 Home</a>
+      <a href="patient.html" style="color:var(--text-muted); text-decoration:none; font-weight:600;">🧓 Patient View (Voice/STT)</a>
+      <a href="caregiver.html" style="color:var(--blue); text-decoration:none; font-weight:700;">👨‍👩‍👦 Caregiver (Suresh) (Active)</a>
+      <a href="dashboard.html" style="color:var(--text-muted); text-decoration:none; font-weight:600;">🩺 Doctor View</a>
+      <a href="demo.html" style="color:var(--text-muted); text-decoration:none; font-weight:600;">🤖 Multi-Agent Live Studio</a>
+    </div>
+    <div>
+      <span style="color:var(--green); font-weight:600;">● Family Caregiver Portal · Role-Based Scoped Access</span>
+    </div>
+  </div>
+
+  <!-- ── Main Dashboard Body ──────────────────────────────────────── -->
+  <div class="container" style="padding-top:24px; padding-bottom:60px;">
+
+    <!-- Caregiver Hero -->
+    <div class="caregiver-hero">
+      <div class="privacy-tag">
+        🔒 Role-Based Privacy: Family Access Scoped (Clinical technical notes isolated)
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:16px;">
+        <div>
+          <h1 style="margin:0 0 6px 0; font-size:26px; font-weight:800;">Ramesh Kumar's Health Overview</h1>
+          <p style="margin:0; font-size:15px; color:var(--text-muted);">
+            78 years · Sector 22 Noida · Monitored continuously by Asha AI &amp; MedInsightAgent
+          </p>
+        </div>
+        <div style="display:flex; gap:12px; flex-wrap:wrap;">
+          <a href="tel:+919876543210" class="btn btn--primary btn--sm" style="background:var(--grad-green); box-shadow:none;">
+            📞 Call Papa Directly
+          </a>
+          <button class="btn btn--ghost btn--sm" onclick="sendFamilyNudge()">
+            💬 Send Check-in WhatsApp
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- KPI Row -->
+    <div class="kpi-row">
+      <div class="kpi-card">
+        <div class="kpi-card__icon" style="--c:var(--red)">⚠️</div>
+        <div class="kpi-card__body">
+          <span class="kpi-card__label">System Escalation Level</span>
+          <span class="kpi-card__value" id="cgEscLevel">Level 3 (High)</span>
+          <span class="kpi-card__sub kpi-card__sub--warn">Recent dizziness &amp; elevated BP</span>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-card__icon" style="--c:var(--green)">💊</div>
+        <div class="kpi-card__body">
+          <span class="kpi-card__label">7-Day Medication Adherence</span>
+          <span class="kpi-card__value" id="cgAdh">70%</span>
+          <span class="kpi-card__sub kpi-card__sub--warn">Missed 6 doses this month</span>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-card__icon" style="--c:var(--amber)">👥</div>
+        <div class="kpi-card__body">
+          <span class="kpi-card__label">Social Wellbeing Status</span>
+          <span class="kpi-card__value" id="cgIsolation">Needs Check-in</span>
+          <span class="kpi-card__sub kpi-card__sub--warn">12 isolated days detected</span>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-card__icon" style="--c:var(--blue)">🩺</div>
+        <div class="kpi-card__body">
+          <span class="kpi-card__label">Next Doctor Consultation</span>
+          <span class="kpi-card__value">Day 30</span>
+          <span class="kpi-card__sub">Dr. Anjali Sharma · Apollo Hospital</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Content Columns -->
+    <div class="cg-grid">
+      
+      <!-- Left Column: Active Alerts Feed with Acknowledgment -->
+      <div>
+        <div class="panel">
+          <div class="panel__header">
+            <div>
+              <h3 class="panel__title">Urgent Alerts Requiring Family Attention</h3>
+              <p class="panel__sub">Review alerts dispatched by Asha &amp; Risk agents, then record your action.</p>
+            </div>
+            <span class="badge badge--red" id="alertCountBadge">3 Active Alerts</span>
+          </div>
+
+          <div id="alertsContainer">
+            <!-- Alert 1 -->
+            <div class="alert-card-item">
+              <div>
+                <span class="badge badge--red" style="margin-bottom:6px; display:inline-block;">Emergency Escalation</span>
+                <strong style="display:block; font-size:15px; color:var(--text);">Dizziness with BP Spike (162/98 mmHg)</strong>
+                <p style="margin:4px 0 0 0; font-size:13px; color:var(--text-muted);">
+                  Ramesh reported feeling unsteady while getting out of bed. Morning Amlodipine dose delayed.
+                </p>
+                <span style="font-size:11px; color:var(--text-dim); display:block; margin-top:6px;">Dispatched via WhatsApp &amp; SMS · 35 mins ago</span>
+              </div>
+              <button class="btn-ack" onclick="openAckModal('alert_bp_spike', 'Dizziness with BP Spike')">
+                ✓ Acknowledge &amp; Log Action
+              </button>
+            </div>
+
+            <!-- Alert 2 -->
+            <div class="alert-card-item warning">
+              <div>
+                <span class="badge badge--amber" style="margin-bottom:6px; display:inline-block;">Medication Warning</span>
+                <strong style="display:block; font-size:15px; color:var(--text);">Metformin Dose Missed</strong>
+                <p style="margin:4px 0 0 0; font-size:13px; color:var(--text-muted);">
+                  Asha morning check-in detected that morning diabetes medication was not taken.
+                </p>
+                <span style="font-size:11px; color:var(--text-dim); display:block; margin-top:6px;">Dispatched via WhatsApp · 2 hours ago</span>
+              </div>
+              <button class="btn-ack" onclick="openAckModal('alert_med_miss', 'Metformin Dose Missed')">
+                ✓ Acknowledge &amp; Log Action
+              </button>
+            </div>
+
+            <!-- Alert 3 -->
+            <div class="alert-card-item info">
+              <div>
+                <span class="badge badge--blue" style="margin-bottom:6px; display:inline-block;">Social Isolation Nudge</span>
+                <strong style="display:block; font-size:15px; color:var(--text);">Extended Solitude Pattern Detected</strong>
+                <p style="margin:4px 0 0 0; font-size:13px; color:var(--text-muted);">
+                  Patient reported feeling lonely during conversational check-in. ConnectAgent suggests a family call today.
+                </p>
+                <span style="font-size:11px; color:var(--text-dim); display:block; margin-top:6px;">Weekly Summary · Yesterday</span>
+              </div>
+              <button class="btn-ack" onclick="openAckModal('alert_isolation', 'Social Isolation Pattern')">
+                ✓ Acknowledge &amp; Log Action
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Caregiver Action History Log -->
+        <div class="panel" style="margin-top:24px;">
+          <div class="panel__header">
+            <h3 class="panel__title">Caregiver Action Log &amp; Audit Trail</h3>
+            <span class="badge badge--green">Synchronized with Care Plan</span>
+          </div>
+          <div class="action-timeline" id="actionLogContainer">
+            <div class="action-entry">
+              <strong>Suresh Kumar called Ramesh Kumar (Phone Check-in)</strong>
+              <p>Spoke with Papa; confirmed he took evening Losartan and drank water. Resting in room.</p>
+              <span>Logged: Today at 09:30 AM · Verified</span>
+            </div>
+            <div class="action-entry">
+              <strong>Delivered Monthly Medication Refill</strong>
+              <p>Delivered 30-day blister packs of Amlodipine and Metformin to Noida house.</p>
+              <span>Logged: 3 days ago · Verified</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: Dispatched WhatsApp Notifications to Suresh -->
+      <div>
+        <div class="panel">
+          <div class="panel__header">
+            <h3 class="panel__title">📱 WhatsApp Notifications</h3>
+            <span class="badge badge--blue">+91-9876543211</span>
+          </div>
+          
+          <div class="wa-mock-box" style="padding:16px; max-height:480px; overflow-y:auto;" id="waThread">
+            <div class="wa-bubble">
+              <strong style="color:var(--blue);">CareSync AI (Asha)</strong><br/>
+              📅 Week 4 Health Summary for Papa (Days 21–27):<br/>
+              • Avg BP: 154.2 mmHg (Elevated)<br/>
+              • Avg Sugar: 231.0 mg/dL<br/>
+              • Adherence: 68% ⚠️<br/>
+              Please plan a check-in call with him today.
+              <div class="wa-status">Delivered ✓✓ · Read 👁️</div>
+            </div>
+
+            <div class="wa-bubble" style="background:rgba(245, 158, 11, 0.12); border-color:rgba(245, 158, 11, 0.3);">
+              <strong style="color:var(--amber);">⚠️ Escalation Alert</strong><br/>
+              Papa reported dizziness this morning after missing his BP tablet. MedInsightAgent raised alert level to 2.
+              <div class="wa-status" style="color:var(--amber);">Delivered ✓✓ · Read 👁️</div>
+            </div>
+
+            <div class="wa-bubble" style="background:rgba(239, 68, 68, 0.15); border-color:rgba(239, 68, 68, 0.35);">
+              <strong style="color:var(--red);">🚨 EMERGENCY NOTIFICATION</strong><br/>
+              Ramesh Kumar pressed SOS alert or reported acute discomfort. Please call immediately or dial 108.
+              <div class="wa-status" style="color:var(--red);">Delivered ✓✓ · SMS Fallback Sent 📨</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Weekly Summary Card -->
+        <div class="panel" style="margin-top:24px;">
+          <h3 class="panel__title" style="margin-bottom:12px;">Next Steps for Suresh</h3>
+          <ul style="padding-left:18px; margin:0; font-size:13px; line-height:1.7; color:var(--text-muted);">
+            <li>Confirm Papa's blood pressure before tomorrow morning's breakfast.</li>
+            <li>Verify pill organizer is stocked for the upcoming week.</li>
+            <li>Accompany Ramesh to Apollo Hospital consultation on Day 30.</li>
+            <li>Asha will send the weekly audio summary on Sunday at 10:00 AM.</li>
+          </ul>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Acknowledgment Modal ─────────────────────────────────────── -->
+  <div class="modal-backdrop" id="ackModal">
+    <div class="modal-content">
+      <h3>Acknowledge Health Alert</h3>
+      <p id="modalAlertTitle" style="font-size:13px; color:var(--text-muted); margin-top:0;"></p>
+      
+      <div class="form-group">
+        <label>Action Taken by Suresh</label>
+        <select id="modalActionSelect">
+          <option value="Called Papa on Phone">Called Papa on Phone</option>
+          <option value="Visited Father at Noida residence">Visited Father at Noida residence</option>
+          <option value="Administered missed medication">Administered missed medication</option>
+          <option value="Scheduled Doctor Consultation">Scheduled Doctor Consultation</option>
+          <option value="Called Emergency / Ambulance (108)">Called Emergency / Ambulance (108)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Caregiver Notes (Visible to Doctor)</label>
+        <textarea id="modalNotes" rows="3" placeholder="e.g. Spoke with Papa, he is feeling better after drinking water and taking his pill..."></textarea>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn btn--ghost btn--sm" onclick="closeAckModal()">Cancel</button>
+        <button class="btn btn--primary btn--sm" onclick="submitAcknowledgment()">Submit Acknowledgment</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let activeAlertId = "";
+    let activeAlertButton = null;
+
+    function openAckModal(alertId, alertTitle) {
+      activeAlertId = alertId;
+      document.getElementById('modalAlertTitle').innerText = `Addressing: "${alertTitle}"`;
+      document.getElementById('ackModal').classList.add('active');
+    }
+
+    function closeAckModal() {
+      document.getElementById('ackModal').classList.remove('active');
+    }
+
+    async function submitAcknowledgment() {
+      const action = document.getElementById('modalActionSelect').value;
+      const notes = document.getElementById('modalNotes').value.trim() || "Caregiver acknowledged alert and checked on patient.";
+
+      try {
+        await fetch('/api/caregiver/acknowledge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            alert_id: activeAlertId,
+            action_taken: action,
+            notes: notes
+          })
+        });
+      } catch (err) {}
+
+      const container = document.getElementById('actionLogContainer');
+      const entry = document.createElement('div');
+      entry.className = 'action-entry';
+      entry.innerHTML = `
+        <strong>Suresh Kumar: ${action}</strong>
+        <p>${notes}</p>
+        <span>Logged: Just now · Synchronized with Clinician</span>
+      `;
+      container.prepend(entry);
+
+      const waThread = document.getElementById('waThread');
+      const wa = document.createElement('div');
+      wa.className = 'wa-bubble';
+      wa.innerHTML = `
+        <strong style="color:var(--blue);">CareSync System</strong><br/>
+        ✓ Thank you Suresh. Action recorded: "<em>${action}</em>". Dr. Anjali Sharma's briefing updated.
+        <div class="wa-status">Delivered ✓✓ · Just now</div>
+      `;
+      waThread.prepend(wa);
+
+      closeAckModal();
+      alert("✅ Alert acknowledged! Action has been saved to the patient's care plan.");
+    }
+
+    async function sendFamilyNudge() {
+      const msg = prompt("Enter WhatsApp message to send to Papa (Ramesh):", "नमस्ते पापा, आज आपकी तबियत कैसी है? दवाई समय पर ले ली?");
+      if (!msg) return;
+
+      try {
+        await fetch('/api/whatsapp/simulate-inbound', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg, from_number: "+91-9876543211" })
+        });
+      } catch (e) {}
+
+      alert("📱 WhatsApp message dispatched to Ramesh Kumar's phone!");
+    }
+  </script>
+</body>
+</html>

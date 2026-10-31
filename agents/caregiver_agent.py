@@ -1,7 +1,8 @@
 """
 agents/caregiver_agent.py
-Caregiver Agent — keeps the patient's family informed and engaged.
+Caregiver Agent (ConnectAgent) — keeps the patient's family informed and engaged.
 Subscribes to isolation, escalation, and family notification events.
+Provides role-based privacy scoping and supports alert acknowledgments and action logs.
 """
 
 from __future__ import annotations
@@ -22,8 +23,9 @@ logger = logging.getLogger(__name__)
 
 class CaregiverAgent(BaseAgent):
     """
-    The Caregiver Agent notifies the family about the patient's status,
-    sends weekly summaries, and responds urgently to escalations.
+    ConnectAgent notifies the family about patient status,
+    sends weekly summaries, facilitates alert acknowledgments,
+    and logs caregiver follow-up actions.
     """
 
     def __init__(
@@ -53,11 +55,12 @@ class CaregiverAgent(BaseAgent):
     # ─── Subscriptions ─────────────────────────────────────────────────────
 
     def _subscribe_to_events(self) -> None:
-        """Register handlers for all events this agent cares about."""
+        """Register handlers for all relevant event types."""
         self.event_bus.subscribe(EventType.FAMILY_NOTIFICATION, self._on_family_notification)
         self.event_bus.subscribe(EventType.ESCALATION_NEEDED, self._on_escalation)
         self.event_bus.subscribe(EventType.SOCIAL_ISOLATION_DETECTED, self._on_isolation)
         self.event_bus.subscribe(EventType.MEDICATION_MISSED, self._on_medication_missed)
+        self.event_bus.subscribe(EventType.RISK_ALERT_ISSUED, self._on_risk_alert)
 
     # ─── Event Handlers ────────────────────────────────────────────────────
 
@@ -73,175 +76,173 @@ class CaregiverAgent(BaseAgent):
     def _on_isolation(self, event: Event) -> None:
         isolation_days = event.data.get("isolation_days", 0)
         lang = CAREGIVER_PROFILE.get("preferred_language", "English")
-        message = self.lang_handler.get_family_alert(lang, "isolation", self.patient_name)
+        message = self.lang_handler.get_family_alert(lang, "isolation", self.patient_name, self.caregiver_name)
         message += (
-            f"\n📊 Detail: {self.patient_name} has had no meaningful social contact "
-            f"for {isolation_days} consecutive days. "
-            f"Please visit or video call him today."
+            f"\n📊 Detail: {self.patient_name} has had no social contact "
+            f"for {isolation_days} consecutive days. Please check in with him today."
         )
         self.notify_family(message, urgency="moderate", day=event.day)
 
     def _on_medication_missed(self, event: Event) -> None:
         day = event.data.get("day", self.care_plan.current_day)
+        med_name = event.data.get("med_name", "prescribed medicine")
         message = (
-            f"💊 Medication Alert: {self.patient_name} missed his medications on Day {day}. "
-            f"Please remind him to take his medicines. "
-            f"Missing BP and diabetes medication can be dangerous."
+            f"💊 Medication Alert: {self.patient_name} missed {med_name} on Day {day}. "
+            f"Please ensure he takes it at the right time. Missing medication can lead to vital spikes."
         )
         self.notify_family(message, urgency="moderate", day=day)
+
+    def _on_risk_alert(self, event: Event) -> None:
+        data = event.data
+        if "caregiver" in data.get("intended_recipient", ""):
+            urgency = "critical" if data.get("risk_level") in ["High Concern", "Emergency"] else "moderate"
+            reasons = "; ".join(data.get("reasons", []))
+            rec = data.get("recommended_action", "")
+            msg = (
+                f"🚨 Health Alert [{data.get('risk_level')}]: {self.patient_name}\n"
+                f"Findings: {reasons}\n"
+                f"Action Recommended: {rec}"
+            )
+            self.notify_family(msg, urgency=urgency, day=event.day)
 
     # ─── Main Methods ──────────────────────────────────────────────────────
 
     def run_check_in(self, patient_data: Dict[str, Any]) -> str:
-        """
-        Called daily by DemoRunner.
-        Generates a brief status update for the caregiver.
-        """
+        """Called daily by DemoRunner to generate status for the caregiver."""
         day = patient_data.get("day", 0)
 
-        # On day 7, 14, 21, 28 send weekly summary
-        if day % 7 == 0 and day > 0:
-            history = self.memory.get_history(self.patient_id, days=7)
-            summary = self.weekly_summary(
-                vitals_list=[
-                    dict(row) for row in history.get("vitals", [])
-                ],
-                day=day,
-            )
-            self.whatsapp.send_message(
-                to=self.caregiver_phone,
-                message=f"📋 WEEKLY HEALTH SUMMARY — Week {day // 7}\n\n{summary}",
-                sender=self.name,
-                message_type="weekly_summary",
-            )
+        # Weekly summary every 7 days
+        if day > 0 and day % 7 == 0:
+            history = self.memory.get_all_vitals(self.patient_id)
+            week_vitals = history[-7:] if len(history) >= 7 else history
+            summary_msg = self.weekly_summary(week_vitals, day=day)
+            self.notify_family(summary_msg, urgency="normal", day=day)
             return f"[Day {day}] Weekly summary sent to {self.caregiver_name}"
 
-        return f"[Day {day}] Caregiver monitoring — no alerts today"
+        return f"[Day {day}] Caregiver monitoring active — no alerts required"
 
-    def notify_family(
-        self,
-        message: str,
-        urgency: str = "normal",
-        day: Optional[int] = None,
-    ) -> None:
-        """
-        Send a notification to the caregiver via WhatsApp (and SMS for critical).
-        urgency: 'normal' | 'moderate' | 'critical'
-        """
-        day = day or self.care_plan.current_day
-        urgency_emoji = {"normal": "ℹ️", "moderate": "⚠️", "critical": "🆘"}.get(urgency, "ℹ️")
-        full_message = (
-            f"{urgency_emoji} Health Update — {self.patient_name} (Day {day})\n\n"
-            f"{message}\n\n"
-            f"— {self.name} AI Care System"
-        )
+    def notify_family(self, message: str, urgency: str = "normal", day: int = 0) -> None:
+        """Send notification via WhatsApp (and SMS if critical)."""
+        alert_id = f"alert_d{day}_{len(self.notifications_sent) + 1}"
 
+        # 1. WhatsApp message
         self.whatsapp.send_message(
-            to=self.caregiver_phone,
-            message=full_message,
-            sender=self.name,
-            message_type=f"alert_{urgency}",
+            recipient=self.caregiver_phone,
+            message=message,
+            sender_name=self.name,
         )
 
+        # 2. SMS if critical
         if urgency == "critical":
             self.sms.send_sms(
-                to=self.caregiver_phone,
-                message=f"URGENT: {self.patient_name} health alert. Check WhatsApp for details.",
+                recipient=self.caregiver_phone,
+                message=f"[URGENT CARESYNC ALERT] {message[:140]}",
                 sender=self.name,
             )
 
-        # Track in care plan
         self.care_plan.add_caregiver_alert(message=message, urgency=urgency)
-        self.notifications_sent.append(
-            {
-                "day": day,
-                "urgency": urgency,
-                "message": message,
-                "timestamp": datetime.now().isoformat(),
-            }
-        )
+        alert_record = {
+            "alert_id": alert_id,
+            "day": day,
+            "urgency": urgency,
+            "message": message,
+            "timestamp": datetime.now().isoformat(),
+            "acknowledged": False,
+        }
+        self.notifications_sent.append(alert_record)
         logger.info(f"[{self.name}] Notified caregiver (urgency={urgency}) on day {day}")
 
-    def weekly_summary(
-        self, vitals_list: List[Dict[str, Any]], day: int = 0
-    ) -> str:
+    def acknowledge_alert(self, alert_id: str, action_taken: str, notes: str = "") -> Dict[str, Any]:
+        """Record caregiver acknowledgment and concrete follow-up action taken."""
+        day = self.care_plan.current_day
+        for alert in self.notifications_sent:
+            if alert["alert_id"] == alert_id:
+                alert["acknowledged"] = True
+                alert["action_taken"] = action_taken
+                alert["acknowledged_at"] = datetime.now().isoformat()
+                break
+
+        self.memory.log_caregiver_action(
+            patient_id=self.patient_id,
+            caregiver_name=self.caregiver_name,
+            action_taken=action_taken,
+            notes=notes,
+            day=day,
+            alert_id=alert_id,
+        )
+
+        action_data = {
+            "alert_id": alert_id,
+            "caregiver": self.caregiver_name,
+            "action_taken": action_taken,
+            "notes": notes,
+            "day": day,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+        self.event_bus.publish(
+            event_type=EventType.CAREGIVER_ACTION_RECORDED,
+            data=action_data,
+            source="CaregiverAgent",
+            day=day,
+        )
+
+        return action_data
+
+    def get_caregiver_dashboard_data(self) -> Dict[str, Any]:
         """
-        Generate a weekly summary message for the caregiver.
-        Uses Gemini if available, otherwise uses a rich template.
+        Role-based scoped view of patient health for family.
+        Excludes raw clinician private notes; highlights safety, adherence, and wellbeing.
         """
+        adherence = self.memory.get_medication_adherence(self.patient_id, days=7)
+        social = self.memory.get_social_summary(self.patient_id, days=7)
+        actions = self.memory.get_caregiver_actions(self.patient_id, limit=10)
+
+        return {
+            "patient": {
+                "name": PATIENT_PROFILE["name"],
+                "age": PATIENT_PROFILE["age"],
+                "conditions": PATIENT_PROFILE["conditions"],
+                "doctor": PATIENT_PROFILE["doctor_name"],
+                "hospital": PATIENT_PROFILE["hospital"],
+                "next_appointment": PATIENT_PROFILE["next_appointment"],
+            },
+            "caregiver": {
+                "name": self.caregiver_name,
+                "phone": self.caregiver_phone,
+            },
+            "escalation_level": self.care_plan.escalation_level,
+            "adherence_7d_pct": adherence["adherence_pct"],
+            "social_interaction_days_7d": social["interaction_days"],
+            "isolation_days_7d": social["isolation_days"],
+            "notifications": self.notifications_sent[-15:],
+            "recent_actions": actions,
+        }
+
+    def weekly_summary(self, vitals_list: List[Dict[str, Any]], day: int = 0) -> str:
+        """Generate weekly summary message for the caregiver."""
         if not vitals_list:
             return "No vitals data recorded this week."
 
-        # Calculate averages
         bp_avg = sum(v.get("bp_systolic", 0) for v in vitals_list) / len(vitals_list)
         glucose_avg = sum(v.get("blood_glucose", 0) for v in vitals_list) / len(vitals_list)
         adherence = self.memory.get_medication_adherence(self.patient_id, days=7)
         social = self.memory.get_social_summary(self.patient_id, days=7)
 
-        week_num = day // 7
-
-        context = {
-            "task": "Generate weekly family health summary",
-            "week_number": week_num,
-            "days_covered": f"Days {day - 6}–{day}",
-            "average_bp_systolic": round(bp_avg, 1),
-            "average_blood_glucose": round(glucose_avg, 1),
-            "medication_adherence_pct": adherence["adherence_pct"],
-            "social_interaction_days": social["interaction_days"],
-            "isolation_days": social["isolation_days"],
-            "escalation_level": self.care_plan.escalation_level,
-            "recent_events": len(self.care_plan.get_critical_events()),
-        }
-
-        if self._llm_available:
-            prompt = self._build_weekly_summary_prompt(context)
-            return self._call_llm(prompt)
-        else:
-            return self._template_weekly_summary(context)
-
-    def _build_weekly_summary_prompt(self, context: Dict[str, Any]) -> str:
-        return f"""
-You are ConnectAgent, an AI that communicates health updates to family caregivers.
-You need to write a clear, caring weekly health summary for the son (Suresh Kumar)
-of an elderly patient (Ramesh Kumar, 78, Hypertension + Diabetes).
-
-WEEK {context['week_number']} SUMMARY DATA:
-- Period: {context['days_covered']}
-- Average BP: {context['average_bp_systolic']} mmHg (target: 120-140)
-- Average Blood Glucose: {context['average_blood_glucose']} mg/dL (target: 100-180)
-- Medication Adherence: {context['medication_adherence_pct']}%
-- Social Interaction: {context['social_interaction_days']} of 7 days
-- Days of Isolation: {context['isolation_days']}
-- Current Alert Level: {context['escalation_level']}/3
-- Critical Events: {context['recent_events']}
-
-Write a friendly, clear summary in English (mixed with a little Hindi if appropriate).
-Include:
-1. Overall week assessment (Good/Okay/Concerning)
-2. Key health metrics in simple language
-3. What needs attention
-4. Specific action items for the family
-Keep it under 200 words. Use bullet points. Be caring but clear.
-""".strip()
-
-    def _template_weekly_summary(self, context: Dict[str, Any]) -> str:
-        """Template-based weekly summary."""
-        escalation = context["escalation_level"]
+        week_num = max(1, day // 7)
+        escalation = self.care_plan.escalation_level
         status = "✅ Stable" if escalation == 0 else ("⚠️ Needs Attention" if escalation <= 2 else "🆘 Critical")
 
-        adherence = context["medication_adherence_pct"]
-        social_days = context["social_interaction_days"]
-
         return (
-            f"📅 Week {context['week_number']} Health Summary — {context['days_covered']}\n"
+            f"📅 Week {week_num} Health Summary (Days {max(1, day - 6)}–{day})\n"
             f"Overall Status: {status}\n\n"
             f"🩺 Vitals:\n"
-            f"  • Average BP: {context['average_bp_systolic']} mmHg\n"
-            f"  • Average Blood Sugar: {context['average_blood_glucose']} mg/dL\n\n"
+            f"  • Avg BP: {round(bp_avg, 1)} mmHg\n"
+            f"  • Avg Blood Sugar: {round(glucose_avg, 1)} mg/dL\n\n"
             f"💊 Medications:\n"
-            f"  • Adherence: {adherence}% {'✅' if adherence >= 90 else '⚠️'}\n\n"
+            f"  • Adherence: {adherence['adherence_pct']}% {'✅' if adherence['adherence_pct'] >= 90 else '⚠️'}\n\n"
             f"👥 Social Wellbeing:\n"
-            f"  • Had interaction {social_days}/7 days "
-            f"{'✅' if social_days >= 5 else '⚠️ Please visit or call'}\n\n"
-            f"{'⚠️ ACTION NEEDED: Please call Papa today — vitals are concerning.' if escalation >= 2 else '✅ Keep supporting his routine. Well done!'}\n"
+            f"  • Interacted on {social['interaction_days']}/7 days "
+            f"{'✅' if social['interaction_days'] >= 5 else '⚠️ Please plan a phone call or visit'}\n\n"
+            f"{'⚠️ ACTION NEEDED: Please check in with Papa today — vitals have deviated from target.' if escalation >= 2 else '✅ Routines are stable. Thank you for your continued support!'}"
         )

@@ -9,6 +9,9 @@ venv/
 env/
 ENV/
 .venv
+.env
+.env.*
+!.env.example
 
 # Local runtime data & logs
 data/

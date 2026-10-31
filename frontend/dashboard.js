@@ -1023,13 +1023,10 @@ function appendChatMessage(text, sender = 'bot', meta = '') {
 }
 
 function respondAshaChat(query) {
-  const q = query.toLowerCase();
-
-  // Try backend API first if running on local server
   fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: query, day: activeDay })
+    body: JSON.stringify({ message: query, day: activeDay, language: currentLang })
   })
   .then(res => res.json())
   .then(data => {
@@ -1040,77 +1037,30 @@ function respondAshaChat(query) {
       }
       return;
     }
-    clientSideAshaResponse(q);
+    clientSideAshaResponse(query);
   })
   .catch(() => {
-    // Graceful offline client-side triage
-    clientSideAshaResponse(q);
+    clientSideAshaResponse(query);
   });
 }
 
 function clientSideAshaResponse(q) {
-  // 1. Chest pain / emergency
-  if (q.includes('सीने में दर्द') || q.includes('chest pain') || q.includes('भारीपन') || q.includes('heart pain')) {
-    appendChatMessage(
-      '⚠️ <strong>रमेश जी, सीने में दर्द गंभीर हो सकता है!</strong><br/>' +
-      'कृपया तुरंत आराम से बैठ जाइए और पानी पीजिए। मैंने आपके बेटे सुरेश को आपातकालीन अलर्ट भेज दिया है। ' +
-      'यदि दर्द बढ़ रहा है तो तुरंत 108 पर कॉल करें।',
-      'bot'
-    );
-    showToast('EMERGENCY ALERT', 'Caregiver Suresh & Dr. Sharma notified of chest discomfort.', 'danger', 6000);
+  if (typeof AshaAI !== 'undefined' && AshaAI.reply) {
+    const res = AshaAI.reply(q, currentLang || 'hi');
+    appendChatMessage(res.reply, 'bot');
+    if (res.alert_level >= 3) {
+      showToast('EMERGENCY ALERT', 'Emergency protocol triggered. Alert sent to Suresh and 108 helpline.', 'danger', 7000);
+    } else if (res.alert_level >= 2) {
+      showToast('Clinical Alert Triggered', 'Symptom recorded and flagged for Dr. Sharma review.', 'warning', 5000);
+    }
     return;
   }
 
-  // 2. Dizziness / चक्कर
-  if (q.includes('चक्कर') || q.includes('dizzy') || q.includes('dizziness') || q.includes('headache') || q.includes('सिरदर्द')) {
-    appendChatMessage(
-      'रमेश जी, चक्कर या सिरदर्द अक्सर बीपी बढ़ने का संकेत हो सकता है। 🩺<br/>' +
-      'कृपया तुरंत बैठ जाएं, थोड़ा पानी पिएं और अपना बीपी मापें। आज शाम की दवाई (Losartan & Atorvastatin) छूटी तो नहीं है?',
-      'bot'
-    );
-    showToast('Symptom Logged', 'Dizziness logged into clinical timeline for Dr. Sharma.', 'warning');
-    return;
+  const lower = q.toLowerCase();
+  if (lower.includes('chest') || lower.includes('दर्द') || lower.includes('pain') || lower.includes('सांस')) {
+    appendChatMessage('⚠️ रमेश जी, कृपया तुरंत आराम से बैठें। आपातकालीन हेल्पलाइन 108 डायल करें। हमने सुरेश जी और डॉ. शर्मा को सूचित किया है।', 'bot');
+    showToast('EMERGENCY ALERT', 'Emergency alert dispatched.', 'danger');
+  } else {
+    appendChatMessage('नमस्ते रमेश जी! मैंने आपकी बात नोट कर ली है। समय पर दवाइयाँ लें और पर्याप्त पानी पिएं। 🙏', 'bot');
   }
-
-  // 3. Missed medication / दवाई
-  if (q.includes('दवाई') || q.includes('medicine') || q.includes('tablet') || q.includes('भूल')) {
-    appendChatMessage(
-      '💊 रमेश जी, आपकी सुबह की दवाइयाँ (Amlodipine 5mg, Metformin 500mg, Aspirin 75mg) बहुत महत्वपूर्ण हैं।<br/>' +
-      'यदि आपने सुबह की खुराक नहीं ली है, तो कृपया हल्का नाश्ता करके अभी ले लें। नियमित दवाई से ही आपका बीपी नियंत्रण में रहेगा।',
-      'bot'
-    );
-    return;
-  }
-
-  // 4. Loneliness / Social
-  if (q.includes('अकेला') || q.includes('lonely') || q.includes('उदासी') || q.includes('sad') || q.includes('बात')) {
-    appendChatMessage(
-      'रमेश जी, मैं हमेशा आपके साथ हूँ। 💙 आपका मानसिक सुकून आपके स्वास्थ्य जितना ही ज़रूरी है।<br/>' +
-      'क्या मैं सुरेश जी को संदेश भेजूं कि वे आज शाम आपको फोन करें?',
-      'bot'
-    );
-    showToast('Social Support Active', 'Caregiver notified to connect with patient.', 'info');
-    return;
-  }
-
-  // 5. Status / Reports
-  if (q.includes('status') || q.includes('रिपोर्ट') || q.includes('बीपी') || q.includes('bp') || q.includes('शुगर') || q.includes('glucose')) {
-    const cur = TIMELINE_DATA[activeDay - 1] || TIMELINE_DATA[0];
-    appendChatMessage(
-      `📊 <strong>Day ${cur.day} का हेल्थ स्टेटस:</strong><br/>` +
-      `• ब्लड प्रेशर: ${cur.bp_systolic}/${cur.bp_diastolic} mmHg<br/>` +
-      `• ब्लड ग्लूकोज: ${cur.blood_glucose} mg/dL<br/>` +
-      `• दवाइयाँ: ${cur.medication_taken ? '✅ ली गई' : '❌ छूटी हुई'}<br/>` +
-      `• एस्केलेशन लेवल: Lvl ${cur.escalation_level}/3`,
-      'bot'
-    );
-    return;
-  }
-
-  // 6. Default Warm Bilingual Reply
-  appendChatMessage(
-    'धन्यवाद रमेश जी बताने के लिए! 🙏 मैंने यह जानकारी आपके दैनिक रिकॉर्ड में नोट कर ली है।<br/>' +
-    'समय पर पानी पीते रहें और अपनी दवाइयाँ नियमित रूप से लें। कोई भी तकलीफ़ हो तो मुझे तुरंत बताइए!',
-    'bot'
-  );
 }

@@ -1,30 +1,31 @@
 """
 simulation/demo_runner.py
 DemoRunner — orchestrates the complete 30-day simulation.
-Shows all four demo requirements:
-  1. Agent-initiated check-ins (voice/WhatsApp)
-  2. Deteriorating trend detection + escalation
-  3. Doctor-facing summary
-  4. Social isolation detection + family nudge
+Coordinates all 5 AI Agents:
+  1. Patient Agent (Asha) — daily multilingual check-ins
+  2. Health Monitoring & Risk Analysis Agent — clinical triage & risk scoring
+  3. Social Wellbeing Agent — loneliness & healthy ageing tracking
+  4. Caregiver Agent (ConnectAgent) — family alerts & weekly summaries
+  5. Clinician Agent (MedInsightAgent) — doctor briefings & care plan oversight
 """
 
 from __future__ import annotations
 import time
 import logging
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from rich.rule import Rule
-from rich.progress import track
-from rich import print as rprint
 
 from agents.patient_agent import PatientAgent
 from agents.caregiver_agent import CaregiverAgent
 from agents.clinician_agent import ClinicianAgent
+from agents.risk_agent import RiskAnalysisAgent, RiskLevel
+from agents.social_agent import SocialWellbeingAgent
 from core.care_plan import CarePlan
 from core.event_bus import EventBus, EventType
 from core.memory import PatientMemory
@@ -43,10 +44,7 @@ console = Console()
 class DemoRunner:
     """
     Orchestrates the 30-day chronic care simulation.
-    Each day:
-      - Patient agent conducts check-in
-      - Clinician agent monitors trends
-      - Caregiver agent handles notifications
+    Each simulated day coordinates all 5 agents through the shared CarePlan and EventBus.
     """
 
     def __init__(
@@ -58,6 +56,8 @@ class DemoRunner:
         memory: PatientMemory,
         event_bus: EventBus,
         timeline: List[Dict[str, Any]],
+        risk_agent: Optional[RiskAnalysisAgent] = None,
+        social_agent: Optional[SocialWellbeingAgent] = None,
     ):
         self.patient_agent = patient_agent
         self.caregiver_agent = caregiver_agent
@@ -66,8 +66,17 @@ class DemoRunner:
         self.memory = memory
         self.event_bus = event_bus
         self.timeline = timeline
+
+        # Initialize dedicated risk & social agents if not injected
+        self.risk_agent = risk_agent or RiskAnalysisAgent(
+            care_plan=self.care_plan, memory=self.memory, event_bus=self.event_bus
+        )
+        self.social_agent = social_agent or SocialWellbeingAgent(
+            care_plan=self.care_plan, memory=self.memory, event_bus=self.event_bus
+        )
+
         self.day_logs: List[Dict[str, Any]] = []
-        self.print_delay = DEMO_CONFIG.get("print_delay_seconds", 0.02)
+        self.print_delay = DEMO_CONFIG.get("print_delay_seconds", 0.01)
 
     # ─── Main Entry ────────────────────────────────────────────────────────
 
@@ -95,17 +104,33 @@ class DemoRunner:
         patient_summary = self.patient_agent.run_check_in(day_data)
         console.print(f"     {patient_summary}")
 
-        # ── 2. Clinician Agent Monitoring ──────────────────────────────────
+        # ── 2. Health Monitoring & Risk Analysis Agent ─────────────────────
+        console.print(f"  [bold yellow]🛡️  {self.risk_agent.name} (Risk Analysis Agent)[/bold yellow]")
+        risk_eval = self.risk_agent.evaluate_health_record(day_data, day=day)
+        console.print(
+            f"     Risk Level: [bold]{risk_eval['risk_level']}[/bold] | "
+            f"Reason: {risk_eval['reasons'][0]}"
+        )
+
+        # ── 3. Social Wellbeing Agent ──────────────────────────────────────
+        console.print(f"  [bold magenta]🌸 {self.social_agent.name} (Social Wellbeing Agent)[/bold magenta]")
+        social_eval = self.social_agent.evaluate_social_health(day, day_data)
+        console.print(
+            f"     Social Score: {social_eval['social_score']}/5 | "
+            f"Isolation (7d): {social_eval['isolation_days_7d']} days"
+        )
+
+        # ── 4. Clinician Agent Monitoring ──────────────────────────────────
         console.print(f"  [bold blue]🩺 {self.clinician_agent.name} (Clinician Agent)[/bold blue]")
         clinician_summary = self.clinician_agent.run_check_in(day_data)
         console.print(f"     {clinician_summary}")
 
-        # ── 3. Caregiver Agent ─────────────────────────────────────────────
+        # ── 5. Caregiver Agent ─────────────────────────────────────────────
         console.print(f"  [bold green]👨‍👩‍👦 {self.caregiver_agent.name} (Caregiver Agent)[/bold green]")
         caregiver_summary = self.caregiver_agent.run_check_in(day_data)
         console.print(f"     {caregiver_summary}")
 
-        # ── 4. Special Events ──────────────────────────────────────────────
+        # ── 6. Special Events ──────────────────────────────────────────────
         self._handle_special_events(day, day_data)
 
         # ── Print escalation status ────────────────────────────────────────
@@ -116,31 +141,29 @@ class DemoRunner:
             "day": day,
             "phase": phase,
             "patient_summary": patient_summary,
+            "risk_level": risk_eval["risk_level"],
+            "social_score": social_eval["social_score"],
             "clinician_summary": clinician_summary,
             "escalation_level": self.care_plan.escalation_level,
         })
 
     def _handle_special_events(self, day: int, day_data: Dict[str, Any]) -> None:
-        """Inject special narrative events at key simulation days."""
-
-        # ── Day 7: First weekly summary ────────────────────────────────────
+        """Inject narrative events at key simulation milestones."""
         if day == 7:
-            self._announce("📅 Week 1 Complete — Weekly summary being sent to family", style="green")
+            self._announce("📅 Week 1 Complete — Weekly summary sent to caregiver Suresh", style="green")
 
-        # ── Day 14: Trend starting to show ─────────────────────────────────
         if day == 14:
             self._announce(
-                "📈 Clinician Agent detects gradual BP uptrend over last 7 days",
+                "📈 Clinician & Risk Agents detect gradual systolic BP uptrend over last 7 days",
                 style="yellow",
             )
             self.care_plan.add_event(
                 "TREND_DETECTED",
-                "BP systolic showing upward trend over past 7 days. Monitoring closely.",
+                "BP systolic upward slope over past 7 days. Monitoring escalated to Level 1.",
                 severity="warning",
                 day=day,
             )
 
-        # ── Day 19: Medication adherence drop alert ────────────────────────
         if day == 19:
             adherence = self.memory.get_medication_adherence(PATIENT_PROFILE["id"], days=7)
             if adherence["adherence_pct"] < 80:
@@ -153,9 +176,7 @@ class DemoRunner:
                     data={
                         "message": (
                             f"⚠️ Ramesh ji's medication adherence has dropped to "
-                            f"{adherence['adherence_pct']}% this week. "
-                            f"Please ensure he is taking his medicines regularly. "
-                            f"Missing BP medication is dangerous."
+                            f"{adherence['adherence_pct']}% this week. Please check in with him."
                         ),
                         "urgency": "moderate",
                     },
@@ -163,20 +184,17 @@ class DemoRunner:
                     day=day,
                 )
 
-        # ── Day 22: ESCALATION TRIGGERED ──────────────────────────────────
         if day == 22:
             self._print_escalation_event(day, day_data)
 
-        # ── Day 24: Social isolation detected ─────────────────────────────
         if day == 24:
             social = self.memory.get_social_summary(PATIENT_PROFILE["id"], days=5)
             if social["isolation_days"] >= 3:
                 self._announce_isolation(day, social)
 
-        # ── Day 27: Preparing for doctor visit ────────────────────────────
         if day == 27:
             self._announce(
-                "📋 Doctor visit in 3 days — Clinician Agent preparing comprehensive briefing",
+                "📋 Doctor visit in 3 days — Clinician Agent synthesizing 10-point briefing",
                 style="blue",
             )
             self.event_bus.publish(
@@ -190,21 +208,18 @@ class DemoRunner:
                 day=day,
             )
 
-        # ── Day 28: Emergency escalation ──────────────────────────────────
         if day == 28:
             self._print_emergency_escalation(day, day_data)
 
-        # ── Day 30: Doctor visit ───────────────────────────────────────────
         if day == 30:
             self._announce(
-                "🏥 Doctor Visit Day! Clinician Agent generating full pre-visit summary...",
+                "🏥 Doctor Visit Day! Full 30-day pre-consultation summary generated.",
                 style="bold blue",
             )
 
     # ─── Special Event Handlers ────────────────────────────────────────────
 
     def _print_escalation_event(self, day: int, day_data: Dict) -> None:
-        """Dramatic escalation trigger on day 22."""
         bp = day_data.get("bp_systolic", 170)
         glucose = day_data.get("blood_glucose", 290)
 
@@ -212,213 +227,117 @@ class DemoRunner:
         console.print(
             Panel(
                 f"[bold red]⚠️  DETERIORATING TREND DETECTED — DAY {day}[/bold red]\n\n"
-                f"[red]Blood Pressure: {bp}/{day_data.get('bp_diastolic', 98)} mmHg[/red] "
-                f"[yellow](Threshold: ≥160)[/yellow]\n"
-                f"[red]Blood Glucose: {glucose} mg/dL[/red] "
-                f"[yellow](Threshold: ≥250 warning)[/yellow]\n\n"
-                f"[yellow]📈 7-day BP trend: INCREASING (+{round((bp - 140) / 140 * 100, 1)}% above baseline)[/yellow]\n"
-                f"[yellow]📈 Glucose trend: INCREASING significantly[/yellow]\n\n"
-                f"[bold cyan]🤖 Clinician Agent → escalating to Level 2 (WARNING)[/bold cyan]\n"
+                f"[red]Blood Pressure: {bp}/{day_data.get('bp_diastolic', 98)} mmHg[/red] (Threshold: ≥160)\n"
+                f"[red]Blood Glucose: {glucose} mg/dL[/red] (Threshold: ≥250 warning)\n\n"
+                f"[bold cyan]🤖 Risk Analysis Agent → Risk classification: High Concern[/bold cyan]\n"
                 f"[bold cyan]📱 Alerting Dr. Anjali Sharma via WhatsApp[/bold cyan]\n"
-                f"[bold green]👨‍👩‍👦 Caregiver Agent → notifying Suresh Kumar[/bold green]",
-                title="[bold red]🚨 SYSTEM ESCALATION EVENT[/bold red]",
+                f"[bold green]👨‍👩‍👦 Caregiver Agent → Notifying Suresh Kumar[/bold green]",
+                title="[bold red]🚨 SYSTEM ESCALATION EVENT (LEVEL 2)[/bold red]",
                 border_style="red",
                 padding=(1, 2),
             )
         )
 
-        # Force escalation
         self.care_plan.escalate(
             2,
-            f"BP={bp} (7-day rising trend), Glucose={glucose} (warning zone), "
-            f"Adherence declining",
+            f"BP={bp} (rising trend), Glucose={glucose} (warning threshold), Adherence dropping",
         )
         self.event_bus.publish(
             event_type=EventType.ESCALATION_NEEDED,
-            data={
-                "level": 2,
-                "vitals": day_data,
-                "message": (
-                    f"🚨 ESCALATION LEVEL 2: Ramesh Kumar's BP has been rising for 7 days "
-                    f"(now {bp}/{day_data.get('bp_diastolic')} mmHg). "
-                    f"Blood glucose {glucose} mg/dL. Medication adherence declining. "
-                    f"Immediate clinical review recommended."
-                ),
-            },
+            data={"level": 2, "vitals": day_data},
             source="DemoRunner",
             day=day,
         )
 
     def _announce_isolation(self, day: int, social: Dict) -> None:
-        """Print isolation detection announcement."""
         console.print()
         console.print(
             Panel(
                 f"[yellow]👴 SOCIAL ISOLATION DETECTED — DAY {day}[/yellow]\n\n"
-                f"Ramesh Kumar has had NO social interaction for "
-                f"[bold]{social['isolation_days']} consecutive days[/bold].\n\n"
-                f"[cyan]🤖 Patient Agent (Asha) → sending gentle nudge to patient[/cyan]\n"
-                f"[green]👨‍👩‍👦 Caregiver Agent → alerting Suresh Kumar[/green]\n\n"
-                f"[italic]Research shows social isolation worsens chronic conditions "
-                f"in elderly patients by 30-40%.[/italic]",
-                title="[yellow]⚠️  SOCIAL WELLBEING ALERT[/yellow]",
+                f"Ramesh Kumar has had no social contact for [bold]{social['isolation_days']} consecutive days[/bold].\n\n"
+                f"[cyan]🌸 Social Wellbeing Agent → Triggered gentle walking & companion nudge[/cyan]\n"
+                f"[green]👨‍👩‍👦 Caregiver Agent → Encouraged Suresh to schedule phone call[/green]",
+                title="[yellow]⚠️  SOCIAL WELLBEING INTERVENTION[/yellow]",
                 border_style="yellow",
                 padding=(1, 2),
             )
         )
 
     def _print_emergency_escalation(self, day: int, day_data: Dict) -> None:
-        """Emergency escalation on day 28."""
         bp = day_data.get("bp_systolic", 178)
         glucose = day_data.get("blood_glucose", 318)
 
         console.print()
         console.print(
             Panel(
-                f"[bold red blink]🆘  CRITICAL ESCALATION — LEVEL 3 — DAY {day}[/bold red blink]\n\n"
-                f"[red]BP: {bp}/{day_data.get('bp_diastolic', 105)} mmHg — DANGER ZONE[/red]\n"
+                f"[bold red]🆘  CRITICAL ESCALATION — LEVEL 3 (EMERGENCY) — DAY {day}[/bold red]\n\n"
+                f"[red]BP: {bp}/{day_data.get('bp_diastolic', 105)} mmHg — CRISIS ZONE[/red]\n"
                 f"[red]Blood Glucose: {glucose} mg/dL — DANGER ZONE (≥300)[/red]\n\n"
-                f"[bold red]IMMEDIATE ACTIONS TRIGGERED:[/bold red]\n"
-                f"  📞 Emergency voice call to Ramesh Kumar\n"
-                f"  📱 WhatsApp + SMS alert to Suresh Kumar\n"
-                f"  🩺 Clinical alert to Dr. Anjali Sharma\n"
-                f"  🚑 Caregiver asked to escort patient to hospital\n\n"
-                f"[bold cyan]Agent Coordination:[/bold cyan]\n"
-                f"  Patient Agent → initiated emergency voice call\n"
-                f"  Clinician Agent → sent structured escalation alert to doctor\n"
-                f"  Caregiver Agent → called family with emergency instructions",
-                title="[bold red]🆘  EMERGENCY ESCALATION[/bold red]",
+                f"[bold red]IMMEDIATE ACTIONS DISPATCHED:[/bold red]\n"
+                f"  📞 Emergency voice call to patient (instructed to sit down calmly)\n"
+                f"  📱 Urgent WhatsApp + SMS alert to caregiver Suresh\n"
+                f"  🩺 Clinical escalation alert to Dr. Anjali Sharma\n"
+                f"  🚑 Emergency 108 protocol standby advisory",
+                title="[bold red]🆘  FAIL-SAFE EMERGENCY PROTOCOL[/bold red]",
                 border_style="bold red",
                 padding=(1, 2),
             )
         )
 
-        self.care_plan.escalate(
-            3,
-            f"CRITICAL: BP={bp} (danger ≥160), Glucose={glucose} (danger ≥300)",
-        )
+        self.care_plan.escalate(3, f"CRITICAL: BP={bp}, Glucose={glucose}")
         self.event_bus.publish(
             event_type=EventType.ESCALATION_NEEDED,
-            data={
-                "level": 3,
-                "vitals": day_data,
-                "message": (
-                    f"🆘 CRITICAL ALERT: Ramesh Kumar (Day {day})\n"
-                    f"BP: {bp}/{day_data.get('bp_diastolic')} mmHg (DANGER)\n"
-                    f"Blood Glucose: {glucose} mg/dL (DANGER)\n"
-                    f"Patient needs IMMEDIATE medical attention.\n"
-                    f"Please call patient and dispatch medical assistance."
-                ),
-            },
+            data={"level": 3, "vitals": day_data},
             source="DemoRunner",
             day=day,
         )
 
-    # ─── Finale ────────────────────────────────────────────────────────────
-
-    def _print_finale(self) -> None:
-        """Print final event bus summary and hand off to report generator."""
+    def _announce(self, message: str, style: str = "white") -> None:
         console.print()
-        console.rule("[bold blue]30-DAY SIMULATION COMPLETE[/bold blue]")
-        console.print()
-
-        # Event bus summary
-        event_counts = self.event_bus.summary()
-        table = Table(title="📊 Agent Event Bus Summary", show_header=True, header_style="bold cyan")
-        table.add_column("Event Type", style="cyan")
-        table.add_column("Count", justify="right", style="bold white")
-
-        for event_type, count in sorted(event_counts.items(), key=lambda x: -x[1]):
-            table.add_row(event_type, str(count))
-
-        console.print(table)
-        console.print()
-
-        # Final care plan state
-        console.print(
-            Panel(
-                self.care_plan.summary_str(),
-                title="[bold]Final Care Plan State[/bold]",
-                border_style="blue",
-            )
-        )
-
-    # ─── Printing Helpers ──────────────────────────────────────────────────
+        console.print(f"  [{style}]▶ {message}[/{style}]")
 
     def _print_intro(self) -> None:
-        """Print the simulation intro banner."""
         console.print()
         console.print(
             Panel(
-                "[bold white]Proactive Agents for Chronic Care & Healthy Ageing[/bold white]\n\n"
-                "[cyan]Patient:[/cyan] Ramesh Kumar, 78M | Hypertension + Type 2 Diabetes\n"
-                "[cyan]Doctor:[/cyan] Dr. Anjali Sharma | Apollo Hospital, Noida\n"
-                "[cyan]Caregiver:[/cyan] Suresh Kumar (Son)\n\n"
-                "[green]Agents Active:[/green]\n"
-                "  🤖 Asha (Patient Agent) — Multilingual check-ins, vitals, social\n"
-                "  🩺 MedInsightAgent (Clinician Agent) — Trend analysis, escalation\n"
-                "  👨‍👩‍👦 ConnectAgent (Caregiver Agent) — Family notifications\n\n"
-                f"[yellow]Simulation:[/yellow] 30-day monitoring (Nov 1 – Nov 30, 2024)\n"
-                f"[yellow]LLM:[/yellow] Google Gemini 1.5 Flash (with template fallback)",
-                title="[bold blue]🏥 AI CHRONIC CARE MANAGEMENT SYSTEM[/bold blue]",
-                subtitle="[dim]Track 4: Healthcare & Social Impact — HEALTH-01[/dim]",
+                f"[bold white]   Proactive Multi-Agent Healthcare Platform (5 AI Agents)[/bold white]\n\n"
+                f"   Patient: {PATIENT_PROFILE['name']}, {PATIENT_PROFILE['age']}M | {', '.join(PATIENT_PROFILE['conditions'])}\n"
+                f"   Doctor: {PATIENT_PROFILE['doctor_name']} | {PATIENT_PROFILE['hospital']}\n"
+                f"   Caregiver: Suresh Kumar (Son)\n\n"
+                f"   Active Agent Ecosystem:\n"
+                f"     🤖 Asha (Patient Agent) — Proactive multilingual check-ins\n"
+                f"     🛡️  RiskAnalysisAgent — Deterministic clinical rules + AI triage\n"
+                f"     🌸 SocialWellbeingAgent — Emotional wellbeing & routine tracking\n"
+                f"     🩺 MedInsightAgent (Clinician Agent) — Trend synthesis & care plan\n"
+                f"     👨‍👩‍👦 ConnectAgent (Caregiver Agent) — Family alerts & action logging",
+                title="[bold blue]🏥 CARESYNC AI — HEALTH-01 TRACK[/bold blue]",
                 border_style="blue",
-                padding=(1, 4),
             )
         )
-        console.print()
-        time.sleep(0.5)
 
     def _print_day_header(self, day: int, date_str: str, phase: str) -> None:
-        """Print a formatted day header."""
-        phase_colors = {
-            "stable": "green",
-            "deteriorating": "yellow",
-            "dangerous": "red",
-            "intervention": "magenta",
+        phase_labels = {
+            "stable": "[green]✅ STABLE[/green]",
+            "deteriorating": "[yellow]📈 DETERIORATING[/yellow]",
+            "dangerous": "[red]⚠️ DANGEROUS[/red]",
+            "intervention": "[bold red]🆘 INTERVENTION[/bold red]",
         }
-        phase_icons = {
-            "stable": "✅",
-            "deteriorating": "📈",
-            "dangerous": "⚠️",
-            "intervention": "🆘",
-        }
-        color = phase_colors.get(phase, "white")
-        icon = phase_icons.get(phase, "•")
-
-        console.print()
-        console.rule(
-            f"[bold {color}]Day {day:2d} | {date_str} | Phase: {icon} {phase.upper()}[/bold {color}]"
-        )
+        phase_str = phase_labels.get(phase, phase)
+        console.print(Rule(f"Day {day:2d} | {date_str} | Phase: {phase_str}", style="dim"))
 
     def _print_escalation_banner(self, day: int) -> None:
-        """Print current escalation level if > 0."""
-        level = self.care_plan.escalation_level
-        if level == 0:
-            return
-        colors = {1: "yellow", 2: "orange3", 3: "bold red"}
-        icons = {1: "👁️", 2: "⚠️", 3: "🆘"}
-        color = colors.get(level, "white")
-        icon = icons.get(level, "")
-        console.print(
-            f"  [{color}]{icon} Escalation Level: {level}/3 — {ESCALATION_LEVELS[level]}[/{color}]"
-        )
+        lvl = self.care_plan.escalation_level
+        colors = {0: "green", 1: "yellow", 2: "red", 3: "bold red"}
+        color = colors.get(lvl, "white")
+        console.print(f"     [dim]Active Escalation:[/dim] [{color}]Level {lvl}/3[/{color}]")
 
-    def _announce(self, message: str, style: str = "white") -> None:
-        """Print a highlighted announcement line."""
-        console.print(f"\n  [bold {style}]  {message}[/bold {style}]\n")
-
-    # ─── Quick Summary Getter ──────────────────────────────────────────────
+    def _print_finale(self) -> None:
+        console.print(Rule("Simulation Complete", style="bold green"))
 
     def get_simulation_summary(self) -> Dict[str, Any]:
-        """Return a summary dict of the simulation run."""
         return {
-            "total_days": len(self.day_logs),
-            "event_counts": self.event_bus.summary(),
-            "peak_escalation": max(
-                (d["escalation_level"] for d in self.day_logs), default=0
-            ),
-            "final_care_plan": self.care_plan.to_dict(),
-            "whatsapp_messages": len(MockWhatsApp.sent_messages),
-            "voice_calls": len(MockVoiceCall.call_log),
+            "total_days": len(self.timeline),
+            "peak_escalation": self.care_plan.escalation_level,
+            "events_count": len(self.event_bus.get_history()),
+            "day_logs": self.day_logs,
         }

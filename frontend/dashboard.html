@@ -28,7 +28,7 @@
         <span>CareSync <span class="accent">AI</span></span>
       </a>
       <span class="topbar__divider"></span>
-      <span class="topbar__title">Patient Dashboard</span>
+      <span class="topbar__title">Clinician Dashboard</span>
     </div>
     <div class="topbar__center">
       <!-- Phase Timeline Pill -->
@@ -52,6 +52,20 @@
       <a href="index.html" class="btn btn--ghost btn--sm">← Home</a>
     </div>
   </header>
+
+  <!-- ── Sub Navigation Hub ────────────────────────────────────────── -->
+  <div style="background:#0F172A; border-bottom:1px solid #1E293B; padding:10px 24px; display:flex; justify-content:space-between; align-items:center; font-size:13px; flex-wrap:wrap; gap:10px;">
+    <div style="display:flex; gap:16px; align-items:center;">
+      <a href="index.html" style="color:#94A3B8; text-decoration:none; font-weight:600;">🏠 Home</a>
+      <a href="patient.html" style="color:#94A3B8; text-decoration:none; font-weight:600;">🧓 Patient View (Voice/STT)</a>
+      <a href="caregiver.html" style="color:#94A3B8; text-decoration:none; font-weight:600;">👨‍👩‍👦 Caregiver (Suresh)</a>
+      <a href="dashboard.html" style="color:#38BDF8; text-decoration:none; font-weight:700;">🩺 Doctor View (Active)</a>
+      <a href="demo.html" style="color:#94A3B8; text-decoration:none; font-weight:600;">🤖 Multi-Agent Live Studio</a>
+    </div>
+    <div>
+      <span style="color:#10B981; font-weight:600;">● Authorized Clinician: Dr. Anjali Sharma (Apollo Hospital)</span>
+    </div>
+  </div>
 
   <div class="db-layout">
 
@@ -494,6 +508,54 @@
 
       </div>
 
+      <!-- ── Care Plan Evolution & Clinical Review Panel ────────────── -->
+      <div class="report-card" style="margin-bottom: 24px; border-left: 4px solid #10B981;">
+        <div class="report-card__header">
+          <div>
+            <h3>🩺 Evolving Care Plan &amp; Clinical Proposal Review</h3>
+            <p>Shared Central Care Plan · Role-Based Clinician Authorization Required for Clinical Changes</p>
+          </div>
+          <span class="badge badge--green">Single Source of Truth</span>
+        </div>
+        <div class="report-card__body">
+          <div style="margin-bottom: 14px;">
+            <strong style="color: #0F172A; font-size: 15px;">Pending Care Plan Proposals (Awaiting Dr. Sharma's Authorization):</strong>
+          </div>
+          <div id="carePlanProposalsList">
+            <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 16px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;">
+              <div>
+                <span class="badge badge--purple" style="margin-bottom: 4px; display: inline-block;">Proposed by: RiskAnalysisAgent</span>
+                <strong style="display: block; font-size: 15px; color: #0F172A;">Medication Change: Increase Amlodipine from 5mg to 10mg daily</strong>
+                <p style="margin: 4px 0 0 0; font-size: 13px; color: #475569;">
+                  <strong>Reason:</strong> Mean systolic BP (152.5 mmHg) persistently exceeding threshold over 14 days.
+                </p>
+                <span style="font-size: 11px; color: #94A3B8;">Requires Clinician Authorization (Status: Pending Review)</span>
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <button class="btn btn--primary btn--xs" onclick="approveCarePlanProposal(this, 'prop_001')">
+                  ✓ Approve &amp; Update
+                </button>
+                <button class="btn btn--ghost btn--xs" onclick="rejectCarePlanProposal(this, 'prop_001')">
+                  ✗ Reject
+                </button>
+              </div>
+            </div>
+
+            <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 16px; display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;">
+              <div>
+                <span class="badge badge--blue" style="margin-bottom: 4px; display: inline-block;">Proposed by: SocialWellbeingAgent</span>
+                <strong style="display: block; font-size: 15px; color: #0F172A;">Activity Goal: Daily guided evening walk 15 mins with caregiver check-in</strong>
+                <p style="margin: 4px 0 0 0; font-size: 13px; color: #475569;">
+                  <strong>Reason:</strong> Elevated isolation score and reduced activity detected over past 7 days.
+                </p>
+                <span style="font-size: 11px; color: #10B981;">Non-clinical proposal · Auto-approved with patient consent</span>
+              </div>
+              <span class="badge badge--green">Active in Care Plan</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Doctor Report Preview -->
       <div class="report-card">
         <div class="report-card__header">
@@ -502,6 +564,9 @@
             <p>Auto-generated by MedInsightAgent · Day 30 · Dr. Anjali Sharma</p>
           </div>
           <div style="display:flex;gap:0.75rem;align-items:center;">
+            <button class="btn btn--secondary btn--sm" id="btn10PointModal" onclick="open10PointModal()">
+              <span>📊 10-Point Briefing</span>
+            </button>
             <button class="btn btn--primary btn--sm" id="btnViewReport" onclick="openReportModal()">
               <span>📄 View Full Report</span>
             </button>
@@ -614,6 +679,141 @@
   <!-- Toast Notification Container -->
   <div class="toast-container" id="toastContainer"></div>
 
+  <script src="asha_conversational.js"></script>
   <script src="dashboard.js"></script>
+  <script>
+    // ── Care Plan Proposal Approval / Rejection ──────────────────────
+    async function approveCarePlanProposal(btn, proposalId) {
+      btn.disabled = true;
+      btn.innerText = "Approving...";
+      try {
+        const res = await fetch('/api/care-plan/review', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            proposal_id: proposalId,
+            approve: true,
+            notes: "Approved by Dr. Anjali Sharma based on 30-day vitals trend review."
+          })
+        });
+        const d = await res.json();
+        const container = btn.closest('[style]');
+        container.style.borderColor = '#10B981';
+        container.style.background = '#F0FDF4';
+        const actionDiv = btn.parentElement;
+        actionDiv.innerHTML = '<span class="badge badge--green" style="font-size:14px; padding:8px 16px;">✓ Approved by Dr. Anjali Sharma</span>';
+        if (typeof showToast === 'function') showToast('Care Plan Updated', `Proposal ${proposalId} approved and activated in care plan.`, 'success');
+      } catch (e) {
+        const actionDiv = btn.parentElement;
+        actionDiv.innerHTML = '<span class="badge badge--green" style="font-size:14px; padding:8px 16px;">✓ Approved (Offline mode)</span>';
+        btn.parentElement.closest('[style]').style.borderColor = '#10B981';
+      }
+    }
+
+    async function rejectCarePlanProposal(btn, proposalId) {
+      const reason = prompt("Enter reason for rejection (visible in audit trail):", "Requires further assessment before medication escalation.");
+      if (!reason) return;
+      btn.disabled = true;
+      try {
+        await fetch('/api/care-plan/review', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ proposal_id: proposalId, approve: false, notes: reason })
+        });
+      } catch (e) {}
+      const container = btn.closest('[style]');
+      container.style.borderColor = '#EF4444';
+      container.style.background = '#FEF2F2';
+      const actionDiv = btn.parentElement;
+      actionDiv.innerHTML = '<span class="badge badge--red" style="font-size:14px; padding:8px 16px;">✗ Rejected — Pending Revision</span>';
+    }
+
+    // ── 10-Point Clinician Briefing Modal ────────────────────────────
+    async function open10PointModal() {
+      try {
+        const res = await fetch('/api/clinician/dashboard');
+        const data = await res.json();
+        const body = document.getElementById('reportModalBody');
+        body.innerHTML = render10PointDashboard(data);
+        document.getElementById('reportModal').classList.add('active');
+      } catch (e) {
+        // Fallback static display
+        document.getElementById('reportModalBody').innerHTML = `
+          <div style="padding:16px; color:#334155; line-height:1.6;">
+            <h3>📊 10-Point MedInsightAgent Clinical Briefing</h3>
+            <ol>
+              <li><strong>Patient Overview:</strong> Ramesh Kumar, 78M · Hypertension &amp; T2 Diabetes</li>
+              <li><strong>Current Conditions:</strong> HTN, T2DM · Allergies: Penicillin, Sulfa</li>
+              <li><strong>Medication Adherence:</strong> 70% (30-day) — 147 doses taken, 63 missed ⚠️</li>
+              <li><strong>Vital Trends:</strong> BP avg 152.5 mmHg, Glucose avg 226.5 mg/dL</li>
+              <li><strong>Symptom History:</strong> Dizziness (Day 18, 22–25), Chest tightness (Day 28)</li>
+              <li><strong>Significant Events:</strong> 21 caregiver alerts, 1 emergency trigger (Day 28)</li>
+              <li><strong>Risk Indicators:</strong> Escalation Level 3 reached Day 28; current: Level 1</li>
+              <li><strong>AI Observations:</strong> Persistent hypertension despite medication; isolation contributing to non-adherence</li>
+              <li><strong>Suggested Topics:</strong> Antihypertensive intensification, HbA1c ordering, social prescription</li>
+              <li><strong>Escalation History:</strong> Level 1 (Day 14), Level 2 (Day 22), Level 3 (Day 28)</li>
+            </ol>
+          </div>`;
+        document.getElementById('reportModal').classList.add('active');
+      }
+    }
+
+    function render10PointDashboard(d) {
+      const overview = d['1_patient_overview'] || {};
+      const conditions = d['2_current_conditions'] || {};
+      const meds = d['3_medication_adherence'] || {};
+      const vitals = d['4_vital_trends'] || {};
+      const risk = d['7_risk_indicators'] || {};
+      const obs = d['8_ai_observations'] || [];
+      const topics = d['9_suggested_clinical_topics'] || [];
+
+      return `
+        <div style="padding:8px; color:#0F172A; line-height:1.65;">
+          <h3 style="margin-top:0;">📊 10-Point MedInsightAgent Structured Clinical Briefing</h3>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; font-size:14px;">
+            <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:14px;">
+              <strong style="color:#2563EB;">1. Patient Overview</strong>
+              <p>${overview.name || 'Ramesh Kumar'}, ${overview.age || 78}M · ${overview.monitoring_period || 'Days 1–30'}</p>
+            </div>
+            <div style="background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:14px;">
+              <strong style="color:#7C3AED;">2. Current Conditions</strong>
+              <p>${(conditions.diagnoses || ['Hypertension', 'T2 Diabetes']).join(', ')}</p>
+            </div>
+            <div style="background:#FEF9C3; border:1px solid #FDE68A; border-radius:8px; padding:14px;">
+              <strong style="color:#B45309;">3. Medication Adherence</strong>
+              <p>${meds.rate_pct || 70}% · Taken: ${meds.taken_doses || 147} · Missed: ${meds.missed_doses || 63}</p>
+              <span class="badge badge--${meds.rate_pct >= 90 ? 'green' : meds.rate_pct >= 75 ? 'amber' : 'red'}">${meds.status || 'Warning'}</span>
+            </div>
+            <div style="background:#FFF1F2; border:1px solid #FCA5A5; border-radius:8px; padding:14px;">
+              <strong style="color:#B91C1C;">4. Vital Trends</strong>
+              <p>BP avg: ${vitals.bp_systolic_avg || 152.5} mmHg (peak ${vitals.bp_systolic_peak || 172})<br/>
+              Glucose avg: ${vitals.blood_glucose_avg || 226.5} mg/dL<br/>
+              HR avg: ${vitals.heart_rate_avg || 78.6} bpm</p>
+            </div>
+            <div style="background:#F0FDF4; border:1px solid #86EFAC; border-radius:8px; padding:14px;">
+              <strong style="color:#15803D;">7. Risk Indicators</strong>
+              <p>Escalation: Level ${risk.current_escalation_level || 3}<br/>
+              ${risk.current_escalation_reason || 'Hypertensive crisis criteria met'}</p>
+            </div>
+            <div style="background:#F0F9FF; border:1px solid #7DD3FC; border-radius:8px; padding:14px;">
+              <strong style="color:#0369A1;">8. AI Observations</strong>
+              <ul style="padding-left:16px; margin:4px 0;">${(obs).slice(0,3).map(o => `<li>${o}</li>`).join('')}</ul>
+            </div>
+          </div>
+          <div style="margin-top:14px; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:14px;">
+            <strong>9. Suggested Topics for Today's Consultation:</strong>
+            <ol style="padding-left:18px; margin:8px 0;">
+              ${(topics.length ? topics : [
+                'Review antihypertensive regimen — consider dose increase or class change',
+                'Order HbA1c to assess 3-month glycaemic control',
+                'Discuss medication adherence support strategies (pill organiser, phone reminders)',
+                'Social prescription referral for isolation management',
+                'Involve caregiver Suresh in care plan discussion'
+              ]).map(t => `<li>${t}</li>`).join('')}
+            </ol>
+          </div>
+        </div>`;
+    }
+  </script>
 </body>
 </html>

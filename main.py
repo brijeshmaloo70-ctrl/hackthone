@@ -1,20 +1,21 @@
 """
 main.py
 Entry point: initialises all components and runs the 30-day chronic care simulation.
+Demonstrates coordination across all 5 AI Agents and shared CarePlan.
 """
 
 import os
 import sys
 import logging
+from datetime import datetime
 
-# -- Fix Windows console encoding --
-if hasattr(sys.stdout, 'reconfigure'):
+# ── Fix Windows console encoding ──────────────────────────────────────────────
+if hasattr(sys.stdout, "reconfigure"):
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
-        sys.stderr.reconfigure(encoding='utf-8')
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
     except Exception:
         pass
-from datetime import datetime
 
 # ── Ensure data/ directory exists BEFORE logging setup ────────────────────────
 os.makedirs("data", exist_ok=True)
@@ -24,7 +25,7 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass  # python-dotenv not installed; environment vars must be set manually
+    pass
 
 # ── Rich imports ──────────────────────────────────────────────────────────────
 try:
@@ -41,7 +42,7 @@ except ImportError:
 
 # ── Configure logging ─────────────────────────────────────────────────────────
 logging.basicConfig(
-    level=logging.WARNING,   # Suppress verbose debug output during demo
+    level=logging.WARNING,
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
@@ -64,6 +65,8 @@ from core.event_bus import EventBus
 from agents.patient_agent import PatientAgent
 from agents.caregiver_agent import CaregiverAgent
 from agents.clinician_agent import ClinicianAgent
+from agents.risk_agent import RiskAnalysisAgent
+from agents.social_agent import SocialWellbeingAgent
 from simulation.patient_data import generate_30_day_timeline
 from simulation.demo_runner import DemoRunner
 from dashboard.report_generator import ReportGenerator
@@ -77,19 +80,19 @@ def main():
         console.print()
         console.print(
             Panel(
-                "[bold green]Initialising AI Chronic Care Management System...[/bold green]\n\n"
-                "[dim]Components: Memory Store · Care Plan · Event Bus · 3 AI Agents[/dim]",
+                "[bold green]Initialising CareSync AI — 5-Agent Chronic Care Ecosystem...[/bold green]\n\n"
+                "[dim]Architecture: Longitudinal SQLite Memory · Singleton Care Plan · Event Bus · 5 AI Agents[/dim]",
                 border_style="green",
             )
         )
     else:
-        print("\n=== AI Chronic Care Management System ===\n")
+        print("\n=== AI Chronic Care Management System (5 Agents) ===\n")
 
     # ── 2. Initialise core components ────────────────────────────────────
-    print_step("Memory Store", "SQLite patient memory initialised", "green")
+    print_step("Memory Store", "SQLite longitudinal patient memory initialised", "green")
     memory = PatientMemory(db_path=DB_CONFIG["path"])
 
-    print_step("Care Plan", "Shared care plan created for Ramesh Kumar", "green")
+    print_step("Care Plan", "Shared evolving care plan created for Ramesh Kumar", "green")
     care_plan = initialize_care_plan(
         patient_id=PATIENT_PROFILE["id"],
         patient_name=PATIENT_PROFILE["name"],
@@ -101,22 +104,36 @@ def main():
     print_step("Event Bus", "Pub/sub event bus initialised", "green")
     event_bus = EventBus()
 
-    # ── 3. Create agents ─────────────────────────────────────────────────
-    print_step("Patient Agent", "Asha (Patient Agent) ready", "cyan")
+    # ── 3. Create all 5 specialized agents ────────────────────────────────
+    print_step("Patient Agent", "Asha (Patient Agent) ready [Hindi, Marathi, English]", "cyan")
     patient_agent = PatientAgent(
         care_plan=care_plan,
         memory=memory,
         event_bus=event_bus,
     )
 
-    print_step("Caregiver Agent", "ConnectAgent (Caregiver Agent) ready", "cyan")
+    print_step("Risk Analysis Agent", "RiskAnalysisAgent ready [Clinical triage & deterministic rules]", "yellow")
+    risk_agent = RiskAnalysisAgent(
+        care_plan=care_plan,
+        memory=memory,
+        event_bus=event_bus,
+    )
+
+    print_step("Social Wellbeing Agent", "SocialWellbeingAgent ready [Loneliness & routine monitoring]", "magenta")
+    social_agent = SocialWellbeingAgent(
+        care_plan=care_plan,
+        memory=memory,
+        event_bus=event_bus,
+    )
+
+    print_step("Caregiver Agent", "ConnectAgent (Caregiver Agent) ready [Family alerts & actions]", "cyan")
     caregiver_agent = CaregiverAgent(
         care_plan=care_plan,
         memory=memory,
         event_bus=event_bus,
     )
 
-    print_step("Clinician Agent", "MedInsightAgent (Clinician Agent) ready", "cyan")
+    print_step("Clinician Agent", "MedInsightAgent (Clinician Agent) ready [10-pt clinical briefing]", "cyan")
     clinician_agent = ClinicianAgent(
         care_plan=care_plan,
         memory=memory,
@@ -147,6 +164,8 @@ def main():
     # ── 6. Create and run the demo ────────────────────────────────────────
     runner = DemoRunner(
         patient_agent=patient_agent,
+        risk_agent=risk_agent,
+        social_agent=social_agent,
         caregiver_agent=caregiver_agent,
         clinician_agent=clinician_agent,
         care_plan=care_plan,
@@ -172,7 +191,7 @@ def main():
 
     # ── 8. Final summary ──────────────────────────────────────────────────
     sim_summary = runner.get_simulation_summary()
-    _print_final_summary(sim_summary, care_plan)
+    _print_final_summary(sim_summary, care_plan, event_bus)
 
     # ── 9. Clean up ───────────────────────────────────────────────────────
     memory.close()
@@ -183,42 +202,43 @@ def main():
 
 
 def print_step(component: str, message: str, color: str = "white") -> None:
-    """Print a startup step."""
     if _rich_available:
         console.print(f"  [bold {color}]▶ {component}:[/bold {color}] {message}")
     else:
         print(f"  [{component}] {message}")
 
 
-def _print_final_summary(summary: dict, care_plan) -> None:
-    """Print the final simulation summary."""
-    event_counts = summary.get("event_counts", {})
+def _print_final_summary(summary: dict, care_plan, event_bus) -> None:
+    events = event_bus.get_history()
+    event_counts = {}
+    for e in events:
+        t = e.get("event_type", "UNKNOWN")
+        event_counts[t] = event_counts.get(t, 0) + 1
 
     if _rich_available:
         console.print()
         console.print(
             Panel(
-                f"[bold]Simulation:[/bold]      30 days completed\n"
-                f"[bold]Peak Escalation:[/bold]  Level {summary.get('peak_escalation', 0)}/3\n"
-                f"[bold]Events fired:[/bold]     {sum(event_counts.values())} total across all types\n"
-                f"[bold]WhatsApp messages:[/bold] {summary.get('whatsapp_messages', 0)} sent\n"
-                f"[bold]Voice calls:[/bold]      {summary.get('voice_calls', 0)} initiated\n\n"
-                f"[dim]Key Events:[/dim]\n"
+                f"[bold]Simulation:[/bold]      30 days completed (All 5 Agents active)\n"
+                f"[bold]Peak Escalation:[/bold]  Level {care_plan.escalation_level}/3 ({care_plan.escalation_reason})\n"
+                f"[bold]Events fired:[/bold]     {len(events)} total on Event Bus\n"
+                f"[bold]Care Plan Proposals:[/bold] {len(care_plan.proposals)} proposed\n\n"
+                f"[dim]Key Dispatched Events:[/dim]\n"
                 + "\n".join(
                     f"  • {k}: {v}"
-                    for k, v in sorted(event_counts.items(), key=lambda x: -x[1])
+                    for k, v in sorted(event_counts.items(), key=lambda x: -x[1])[:8]
                 )
-                + f"\n\n[dim]Final Care Plan:[/dim]\n  {care_plan.summary_str()}\n\n"
-                f"[green]📁 Report saved to reports/[/green]\n"
-                f"[green]🗄️  Database saved to data/patient_memory.db[/green]",
-                title="[bold blue]🏁 SIMULATION COMPLETE[/bold blue]",
+                + f"\n\n[dim]Final Care Plan Status:[/dim]\n  {care_plan.summary_str()}\n\n"
+                f"[green]📁 Pre-consultation report saved to reports/[/green]\n"
+                f"[green]🗄️  Persistent database saved to data/patient_memory.db[/green]",
+                title="[bold blue]🏁 5-AGENT SIMULATION COMPLETE[/bold blue]",
                 border_style="blue",
             )
         )
     else:
         print("\n=== SIMULATION COMPLETE ===")
-        print(f"Peak Escalation: {summary.get('peak_escalation', 0)}/3")
-        print(f"Events: {sum(event_counts.values())}")
+        print(f"Peak Escalation: Level {care_plan.escalation_level}/3")
+        print(f"Events: {len(events)}")
         print(f"Care Plan: {care_plan.summary_str()}")
 
 
