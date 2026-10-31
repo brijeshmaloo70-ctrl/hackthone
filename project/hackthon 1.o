@@ -1,0 +1,1099 @@
+import hashlib
+import hmac
+import os
+import sqlite3
+import uuid
+from contextlib import contextmanager
+from datetime import datetime, timedelta, date, time
+
+import streamlit as st
+
+DB_PATH = "caremate.db"
+GRACE_MINUTES = 60
+
+# -----------------------------
+# Database
+# -----------------------------
+
+@contextmanager
+def db():
+    """Open a connection, commit on success, roll back on error, always close.
+
+    NOTE: never call st.rerun() inside a `with db()` block. rerun works by
+    raising an exception, which would roll back the transaction.
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def init_db():
+    with db() as conn:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            name TEXT DEFAULT '',
+            age INTEGER,
+            conditions TEXT DEFAULT '',
+            emergency_contact TEXT DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS medicines (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            dose TEXT NOT NULL,
+            time_of_day TEXT NOT NULL,
+            notes TEXT DEFAULT '',
+            active INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS dose_records (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            medicine_id TEXT NOT NULL,
+            scheduled_date TEXT NOT NULL,
+            scheduled_time TEXT NOT NULL,
+            status TEXT NOT NULL,
+            recorded_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS readings (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            reading_type TEXT NOT NULL,
+            value REAL NOT NULL,
+            secondary_value REAL,
+            taken_at TEXT NOT NULL,
+            level TEXT NOT NULL,
+            note TEXT DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS checkins (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            checkin_date TEXT NOT NULL,
+            mood TEXT NOT NULL,
+            symptoms TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS alerts (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            alert_type TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            read INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS reports (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            week_start TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        """)
+
+
+def new_id():
+    return str(uuid.uuid4())
+
+
+def now_iso():
+    return datetime.now().isoformat(timespec="seconds")
+
+
+# -----------------------------
+# Password handling
+# -----------------------------
+
+def hash_password(password: str, salt_hex: str | None = None) -> str:
+    """Salted PBKDF2-SHA256. Stored as 'salt$hash'."""
+    salt_hex = salt_hex or os.urandom(16).hex()
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode(), bytes.fromhex(salt_hex), 200_000
+    ).hex()
+    return f"{salt_hex}${digest}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    if "$" not in stored:
+        # Legacy unsalted SHA-256 hash (from the old version of the app)
+        legacy = hashlib.sha256(password.encode()).hexdigest()
+        return hmac.compare_digest(legacy, stored)
+    salt_hex, _ = stored.split("$", 1)
+    return hmac.compare_digest(hash_password(password, salt_hex), stored)
+
+
+def public_user(row) -> dict:
+    """Return the user record without the password hash."""
+    data = dict(row)
+    data.pop("password_hash", None)
+    return data
+
+
+def load_user(user_id: str):
+    with db() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    return public_user(row) if row else None
+
+
+def create_user(email, password, name):
+    email = email.strip().lower()
+    with db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM users WHERE email = ?", (email,)
+        ).fetchone()
+        if existing:
+            return None
+        user_id = new_id()
+        conn.execute(
+            """INSERT INTO users (id, email, password_hash, name, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (user_id, email, hash_password(password), name.strip(), now_iso())
+        )
+        return user_id
+
+
+def authenticate(email, password):
+    email = email.strip().lower()
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE email = ?", (email,)
+        ).fetchone()
+        if not row or not verify_password(password, row["password_hash"]):
+            return None
+        # Upgrade legacy hashes to salted ones on successful login
+        if "$" not in row["password_hash"]:
+            conn.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (hash_password(password), row["id"])
+            )
+    return public_user(row)
+
+
+# -----------------------------
+# Flash messages (survive st.rerun)
+# -----------------------------
+
+def flash(kind: str, message: str):
+    st.session_state.flash = (kind, message)
+
+
+def show_flash():
+    item = st.session_state.pop("flash", None)
+    if item:
+        kind, message = item
+        getattr(st, kind, st.info)(message)
+
+
+# -----------------------------
+# Health rules
+# -----------------------------
+
+def classify_reading(reading_type, value, secondary_value=None):
+    if reading_type == "Blood sugar":
+        if value < 54:
+            return "Critical"
+        if value < 70 or value > 180:
+            return "Warning"
+        return "Normal"
+
+    if reading_type == "Blood pressure":
+        systolic = value
+        diastolic = secondary_value or 0
+        if systolic >= 180 or diastolic >= 120:
+            return "Critical"
+        if systolic >= 140 or diastolic >= 90:
+            return "Warning"
+        return "Normal"
+
+    if reading_type == "Oxygen":
+        if value < 92:
+            return "Warning"
+        return "Normal"
+
+    return "Normal"
+
+
+def add_alert(user_id, alert_type, severity, title, message, conn=None):
+    """Insert an alert. Pass `conn` when already inside a db() block to avoid
+    opening a second writer connection (which causes 'database is locked')."""
+    sql = """INSERT INTO alerts
+             (id, user_id, alert_type, severity, title, message, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)"""
+    params = (new_id(), user_id, alert_type, severity, title, message, now_iso())
+    if conn is not None:
+        conn.execute(sql, params)
+    else:
+        with db() as c:
+            c.execute(sql, params)
+
+
+def run_missed_activity_checks(user_id):
+    """Runs when the app is opened / rerun, not on a background timer."""
+    now = datetime.now()
+    today = date.today().isoformat()
+
+    with db() as conn:
+        medicines = conn.execute(
+            "SELECT * FROM medicines WHERE user_id = ? AND active = 1",
+            (user_id,)
+        ).fetchall()
+
+        for med in medicines:
+            scheduled = datetime.combine(
+                date.today(), time.fromisoformat(med["time_of_day"])
+            )
+
+            # Not overdue yet
+            if now < scheduled + timedelta(minutes=GRACE_MINUTES):
+                continue
+
+            # Medicine was added after its scheduled time today: don't penalise
+            try:
+                if datetime.fromisoformat(med["created_at"]) > scheduled:
+                    continue
+            except ValueError:
+                pass
+
+            existing = conn.execute(
+                """SELECT id FROM dose_records
+                   WHERE user_id = ? AND medicine_id = ? AND scheduled_date = ?""",
+                (user_id, med["id"], today)
+            ).fetchone()
+            if existing:
+                continue
+
+            conn.execute(
+                """INSERT INTO dose_records
+                   (id, user_id, medicine_id, scheduled_date, scheduled_time,
+                    status, recorded_at)
+                   VALUES (?, ?, ?, ?, ?, 'Missed', ?)""",
+                (new_id(), user_id, med["id"], today, med["time_of_day"], now_iso())
+            )
+            add_alert(
+                user_id, "Missed dose", "Warning",
+                f"Missed dose: {med['name']}",
+                f"{med['name']} ({med['dose']}) scheduled at "
+                f"{med['time_of_day']} was not marked as taken within "
+                f"{GRACE_MINUTES} minutes.",
+                conn=conn
+            )
+
+        missed_today = conn.execute(
+            """SELECT COUNT(*) AS c FROM dose_records
+               WHERE user_id = ? AND scheduled_date = ? AND status = 'Missed'""",
+            (user_id, today)
+        ).fetchone()["c"]
+
+        if missed_today >= 2:
+            already = conn.execute(
+                """SELECT id FROM alerts
+                   WHERE user_id = ? AND alert_type = 'Multiple missed doses'
+                   AND created_at LIKE ?""",
+                (user_id, today + "%")
+            ).fetchone()
+            if not already:
+                add_alert(
+                    user_id, "Multiple missed doses", "Critical",
+                    "Two or more doses missed today",
+                    f"{missed_today} doses were missed today. "
+                    "Please review today's medication schedule.",
+                    conn=conn
+                )
+
+        checkin = conn.execute(
+            "SELECT id FROM checkins WHERE user_id = ? AND checkin_date = ?",
+            (user_id, today)
+        ).fetchone()
+
+        if not checkin and now.time() >= time(20, 0):
+            already = conn.execute(
+                """SELECT id FROM alerts
+                   WHERE user_id = ? AND alert_type = 'Missing check-in'
+                   AND created_at LIKE ?""",
+                (user_id, today + "%")
+            ).fetchone()
+            if not already:
+                add_alert(
+                    user_id, "Missing check-in", "Warning",
+                    "Daily check-in not completed",
+                    "No daily check-in has been recorded by 8:00 PM.",
+                    conn=conn
+                )
+
+
+def record_dose(user_id, medicine_id, scheduled_time, status):
+    """Create or update today's dose record (so a 'Missed' dose can become 'Late')."""
+    today = date.today().isoformat()
+    with db() as conn:
+        existing = conn.execute(
+            """SELECT id FROM dose_records
+               WHERE user_id = ? AND medicine_id = ? AND scheduled_date = ?""",
+            (user_id, medicine_id, today)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE dose_records SET status = ?, recorded_at = ? WHERE id = ?",
+                (status, now_iso(), existing["id"])
+            )
+        else:
+            conn.execute(
+                """INSERT INTO dose_records
+                   (id, user_id, medicine_id, scheduled_date, scheduled_time,
+                    status, recorded_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (new_id(), user_id, medicine_id, today, scheduled_time,
+                 status, now_iso())
+            )
+
+
+# -----------------------------
+# AI placeholder
+# -----------------------------
+
+def build_ai_context(user_id, user_message):
+    with db() as conn:
+        meds = conn.execute(
+            """SELECT name, dose, time_of_day FROM medicines
+               WHERE user_id = ? AND active = 1""",
+            (user_id,)
+        ).fetchall()
+
+        recent_readings = conn.execute(
+            """SELECT reading_type, value, secondary_value, level, taken_at
+               FROM readings WHERE user_id = ?
+               ORDER BY taken_at DESC LIMIT 10""",
+            (user_id,)
+        ).fetchall()
+
+    med_lines = "\n".join(
+        f"- {m['name']}, {m['dose']}, at {m['time_of_day']}" for m in meds
+    ) or "- No active medicines recorded."
+
+    reading_lines = "\n".join(
+        f"- {r['reading_type']}: {r['value']:g}"
+        + (f"/{r['secondary_value']:g}" if r["secondary_value"] is not None else "")
+        + f" ({r['level']}) on {r['taken_at']}"
+        for r in recent_readings
+    ) or "- No recent readings."
+
+    return f"""You are CareMate AI, a supportive health-reminder assistant.
+You may help with medication schedules, logging, general wellness, and explaining app data.
+You must not diagnose conditions or replace professional medical advice.
+If the user describes an emergency, tell them to contact local emergency services.
+
+Active medicines:
+{med_lines}
+
+Recent readings:
+{reading_lines}
+
+User message:
+{user_message}
+"""
+
+
+def ask_ai(user_id, user_message):
+    """Replace the body with a real LLM API call, sending `context` as the prompt."""
+    context = build_ai_context(user_id, user_message)  # noqa: F841 (used once an LLM is connected)
+
+    return (
+        "I can help you track medicines, readings, check-ins, and alerts. "
+        "For urgent symptoms, severe low blood sugar, chest pain, breathing difficulty, "
+        "or fainting, contact emergency services immediately.\n\n"
+        "Your message has been recorded. Connect this function to your chosen AI provider "
+        "to enable full conversational responses."
+    )
+
+
+# -----------------------------
+# UI setup
+# -----------------------------
+
+st.set_page_config(page_title="CareMate AI", page_icon="❤️", layout="wide")
+
+init_db()
+
+if "user" not in st.session_state:
+    st.session_state.user = None
+if "page" not in st.session_state:
+    st.session_state.page = "Welcome"
+
+
+def go(page_name):
+    st.session_state.page = page_name
+
+
+def sign_out():
+    st.session_state.user = None
+    st.session_state.page = "Welcome"
+    st.rerun()
+
+
+def sidebar():
+    user = st.session_state.user
+    with st.sidebar:
+        st.title("CareMate AI")
+        st.caption("Personal health reminders and insights")
+
+        if not user:
+            for label in ("Welcome", "Sign in", "Create account"):
+                if st.button(label, use_container_width=True, key=f"nav_{label}"):
+                    st.session_state.page = label
+                    st.rerun()
+            return
+
+        run_missed_activity_checks(user["id"])
+
+        pages = [
+            "Dashboard", "Today", "Medicines", "Readings", "Check-in",
+            "Alerts", "Assistant", "Weekly report", "Profile"
+        ]
+
+        for p in pages:
+            is_current = st.session_state.page == p
+            if st.button(
+                p,
+                use_container_width=True,
+                key=f"nav_{p}",
+                type="primary" if is_current else "secondary",
+            ):
+                st.session_state.page = p
+                st.rerun()
+
+        st.divider()
+        st.write(f"Signed in as **{user['email']}**")
+        if st.button("Sign out", use_container_width=True, key="nav_signout"):
+            sign_out()
+
+
+# -----------------------------
+# Pages
+# -----------------------------
+
+def welcome_page():
+    st.title("Welcome to CareMate AI")
+    st.write(
+        "CareMate AI helps you remember medicines, record health readings, "
+        "complete daily check-ins, and see important alerts in one place."
+    )
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.info("### Medicines\nTrack doses and mark them as taken.")
+    with col2:
+        st.info("### Readings\nLog blood sugar, blood pressure, and oxygen.")
+    with col3:
+        st.info("### Alerts\nSee missed doses and unusual readings in-app.")
+
+    st.warning(
+        "CareMate AI is a support tool, not a medical device or a replacement "
+        "for advice from your doctor."
+    )
+
+    st.button("Get started", type="primary", on_click=go, args=("Sign in",))
+
+
+def signin_page():
+    st.title("Sign in")
+
+    with st.form("signin_form"):
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Sign in", use_container_width=True)
+
+    if submitted:
+        user = authenticate(email, password) if email and password else None
+        if user:
+            st.session_state.user = user
+            st.session_state.page = "Dashboard"
+            st.rerun()
+        else:
+            st.error("Incorrect email or password.")
+
+    st.divider()
+    st.button("Create a new account", on_click=go, args=("Create account",))
+
+
+def signup_page():
+    st.title("Create account")
+
+    with st.form("signup_form"):
+        name = st.text_input("Your name")
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        confirm = st.text_input("Confirm password", type="password")
+        submitted = st.form_submit_button("Create account", use_container_width=True)
+
+    if submitted:
+        if not email.strip() or not password or not name.strip():
+            st.error("Please complete all fields.")
+        elif "@" not in email:
+            st.error("Please enter a valid email address.")
+        elif password != confirm:
+            st.error("Passwords do not match.")
+        elif len(password) < 8:
+            st.error("Use at least 8 characters.")
+        else:
+            user_id = create_user(email, password, name)
+            if not user_id:
+                st.error("An account with this email already exists.")
+            else:
+                flash("success", "Account created. Please sign in.")
+                st.session_state.page = "Sign in"
+                st.rerun()
+
+    st.divider()
+    st.button("I already have an account", on_click=go, args=("Sign in",))
+
+
+def dashboard_page():
+    user = st.session_state.user
+    st.title("Dashboard")
+    today = date.today().isoformat()
+
+    with db() as conn:
+        meds = conn.execute(
+            "SELECT COUNT(*) AS c FROM medicines WHERE user_id = ? AND active = 1",
+            (user["id"],)
+        ).fetchone()["c"]
+
+        doses_taken = conn.execute(
+            """SELECT COUNT(*) AS c FROM dose_records
+               WHERE user_id = ? AND scheduled_date = ?
+               AND status IN ('Taken', 'Late')""",
+            (user["id"], today)
+        ).fetchone()["c"]
+
+        readings = conn.execute(
+            "SELECT COUNT(*) AS c FROM readings WHERE user_id = ?",
+            (user["id"],)
+        ).fetchone()["c"]
+
+        alerts = conn.execute(
+            "SELECT COUNT(*) AS c FROM alerts WHERE user_id = ? AND read = 0",
+            (user["id"],)
+        ).fetchone()["c"]
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Active medicines", meds)
+    c2.metric("Doses taken today", doses_taken)
+    c3.metric("Readings logged", readings)
+    c4.metric("Unread alerts", alerts)
+
+    st.subheader("Quick actions")
+    a, b, c = st.columns(3)
+    a.button("Record today's doses", use_container_width=True,
+             on_click=go, args=("Today",))
+    b.button("Add a reading", use_container_width=True,
+             on_click=go, args=("Readings",))
+    c.button("Complete check-in", use_container_width=True,
+             on_click=go, args=("Check-in",))
+
+
+def today_page():
+    user = st.session_state.user
+    st.title("Today's doses")
+    today = date.today().isoformat()
+
+    # Read everything first, close the connection, then render.
+    with db() as conn:
+        meds = conn.execute(
+            """SELECT * FROM medicines
+               WHERE user_id = ? AND active = 1
+               ORDER BY time_of_day""",
+            (user["id"],)
+        ).fetchall()
+        records = conn.execute(
+            """SELECT medicine_id, status FROM dose_records
+               WHERE user_id = ? AND scheduled_date = ?""",
+            (user["id"], today)
+        ).fetchall()
+
+    if not meds:
+        st.info("No active medicines yet. Add them on the Medicines page.")
+        return
+
+    status_by_med = {r["medicine_id"]: r["status"] for r in records}
+
+    for med in meds:
+        status = status_by_med.get(med["id"], "Pending")
+
+        with st.container(border=True):
+            col1, col2, col3 = st.columns([3, 1, 1])
+            col1.write(f"**{med['name']}** — {med['dose']}")
+            col1.caption(f"Scheduled at {med['time_of_day']}")
+            col2.write(f"**{status}**")
+
+            if status == "Pending":
+                if col3.button("Mark taken", key=f"take_{med['id']}"):
+                    record_dose(user["id"], med["id"], med["time_of_day"], "Taken")
+                    st.rerun()
+            elif status == "Missed":
+                if col3.button("Mark taken (late)", key=f"late_{med['id']}"):
+                    record_dose(user["id"], med["id"], med["time_of_day"], "Late")
+                    st.rerun()
+            else:
+                col3.button("Taken ✓", disabled=True, key=f"done_{med['id']}")
+
+
+def medicines_page():
+    user = st.session_state.user
+    st.title("Medicines")
+    show_flash()
+
+    with st.form("add_medicine", clear_on_submit=True):
+        st.subheader("Add medicine")
+        name = st.text_input("Medicine name")
+        dose = st.text_input("Dose", placeholder="e.g. 500 mg, 1 tablet")
+        time_of_day = st.time_input("Scheduled time", value=time(8, 0))
+        notes = st.text_area("Notes", height=80)
+        submitted = st.form_submit_button("Add medicine")
+
+    if submitted:
+        if not name.strip() or not dose.strip():
+            st.error("Medicine name and dose are required.")
+        else:
+            with db() as conn:
+                conn.execute(
+                    """INSERT INTO medicines
+                       (id, user_id, name, dose, time_of_day, notes, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (new_id(), user["id"], name.strip(), dose.strip(),
+                     time_of_day.strftime("%H:%M"), notes.strip(), now_iso())
+                )
+            flash("success", f"{name.strip()} added.")
+            st.rerun()
+
+    st.divider()
+    st.subheader("Your medicines")
+
+    with db() as conn:
+        meds = conn.execute(
+            "SELECT * FROM medicines WHERE user_id = ? ORDER BY time_of_day",
+            (user["id"],)
+        ).fetchall()
+
+    if not meds:
+        st.info("No medicines added yet.")
+        return
+
+    for med in meds:
+        with st.container(border=True):
+            col1, col2, col3 = st.columns([4, 1, 1])
+            col1.write(f"**{med['name']}** — {med['dose']}")
+            col1.caption(f"Time: {med['time_of_day']} | {med['notes'] or 'No notes'}")
+            col2.write("Active" if med["active"] else "Inactive")
+
+            if col3.button("Toggle", key=f"toggle_{med['id']}"):
+                with db() as conn:
+                    conn.execute(
+                        "UPDATE medicines SET active = ? WHERE id = ? AND user_id = ?",
+                        (0 if med["active"] else 1, med["id"], user["id"])
+                    )
+                st.rerun()
+
+
+def readings_page():
+    user = st.session_state.user
+    st.title("Readings")
+    show_flash()
+
+    # Selectbox is OUTSIDE the form so the diastolic field appears immediately.
+    reading_type = st.selectbox(
+        "Reading type", ["Blood sugar", "Blood pressure", "Oxygen"]
+    )
+
+    help_text = {
+        "Blood sugar": "Blood sugar in mg/dL.",
+        "Blood pressure": "Systolic pressure (top number) in mmHg.",
+        "Oxygen": "Oxygen saturation percentage (SpO2).",
+    }[reading_type]
+
+    with st.form("add_reading", clear_on_submit=True):
+        value = st.number_input(
+            "Primary value", min_value=0.0, step=0.1, value=0.0, help=help_text
+        )
+
+        secondary_value = None
+        if reading_type == "Blood pressure":
+            secondary_value = st.number_input(
+                "Diastolic blood pressure (bottom number)",
+                min_value=0.0, step=1.0, value=0.0
+            )
+
+        note = st.text_input("Note")
+        submitted = st.form_submit_button("Save reading")
+
+    if submitted:
+        if value <= 0:
+            st.error("Please enter a value greater than 0.")
+        elif reading_type == "Blood pressure" and (secondary_value or 0) <= 0:
+            st.error("Please enter the diastolic value as well.")
+        else:
+            level = classify_reading(reading_type, value, secondary_value)
+
+            with db() as conn:
+                conn.execute(
+                    """INSERT INTO readings
+                       (id, user_id, reading_type, value, secondary_value,
+                        taken_at, level, note)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (new_id(), user["id"], reading_type, value,
+                     secondary_value, now_iso(), level, note.strip())
+                )
+
+                if level in ("Warning", "Critical"):
+                    value_text = f"{value:g}"
+                    if secondary_value is not None:
+                        value_text += f"/{secondary_value:g}"
+                    add_alert(
+                        user["id"],
+                        f"{reading_type} reading",
+                        level,
+                        f"{reading_type} is {level.lower()}",
+                        f"Your {reading_type.lower()} reading was {value_text}, "
+                        f"classified as {level}.",
+                        conn=conn
+                    )
+
+            flash("success", f"Reading saved. Status: {level}.")
+            st.rerun()
+
+    st.divider()
+    st.subheader("Recent readings")
+
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT * FROM readings
+               WHERE user_id = ?
+               ORDER BY taken_at DESC LIMIT 50""",
+            (user["id"],)
+        ).fetchall()
+
+    if not rows:
+        st.info("No readings recorded yet.")
+        return
+
+    colors = {"Normal": "green", "Warning": "orange", "Critical": "red"}
+
+    for r in rows:
+        value_text = f"{r['value']:g}"
+        if r["secondary_value"] is not None:
+            value_text += f"/{r['secondary_value']:g}"
+
+        color = colors.get(r["level"], "gray")
+        note_text = f" | {r['note']}" if r["note"] else ""
+
+        st.markdown(
+            f"**{r['reading_type']}**: {value_text} — "
+            f":{color}[{r['level']}]  \n"
+            f"{r['taken_at']}{note_text}"
+        )
+
+
+def checkin_page():
+    user = st.session_state.user
+    st.title("Daily check-in")
+    show_flash()
+
+    today = date.today().isoformat()
+
+    with db() as conn:
+        existing = conn.execute(
+            "SELECT * FROM checkins WHERE user_id = ? AND checkin_date = ?",
+            (user["id"], today)
+        ).fetchone()
+
+    if existing:
+        st.success("You have already completed today's check-in.")
+        st.write(f"**Mood:** {existing['mood']}")
+        st.write(f"**Symptoms:** {existing['symptoms'] or 'None recorded'}")
+        st.write(f"**Notes:** {existing['notes'] or 'None'}")
+        return
+
+    with st.form("checkin_form"):
+        mood = st.select_slider(
+            "How do you feel today?",
+            options=["Very poor", "Poor", "Okay", "Good", "Very good"],
+            value="Okay"
+        )
+        symptoms = st.text_area("Symptoms", placeholder="e.g. headache, tiredness, nausea")
+        notes = st.text_area("Anything else to note?")
+        submitted = st.form_submit_button("Submit check-in")
+
+    if submitted:
+        with db() as conn:
+            conn.execute(
+                """INSERT INTO checkins
+                   (id, user_id, checkin_date, mood, symptoms, notes, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (new_id(), user["id"], today, mood, symptoms.strip(),
+                 notes.strip(), now_iso())
+            )
+        flash("success", "Check-in saved.")
+        st.rerun()
+
+
+def alerts_page():
+    user = st.session_state.user
+    st.title("Alerts")
+
+    with db() as conn:
+        alerts = conn.execute(
+            """SELECT * FROM alerts
+               WHERE user_id = ?
+               ORDER BY created_at DESC LIMIT 100""",
+            (user["id"],)
+        ).fetchall()
+
+    if not alerts:
+        st.info("No alerts yet.")
+        return
+
+    if any(not a["read"] for a in alerts):
+        if st.button("Mark all as read"):
+            with db() as conn:
+                conn.execute(
+                    "UPDATE alerts SET read = 1 WHERE user_id = ?", (user["id"],)
+                )
+            st.rerun()
+
+    colors = {"Info": "blue", "Warning": "orange", "Critical": "red"}
+
+    for alert in alerts:
+        color = colors.get(alert["severity"], "gray")
+
+        with st.container(border=True):
+            st.markdown(
+                f"**:{color}[{alert['severity']}]** {alert['title']}  \n"
+                f"{alert['message']}  \n"
+                f"_{alert['created_at']}_"
+            )
+
+            if not alert["read"]:
+                if st.button("Mark read", key=f"read_{alert['id']}"):
+                    with db() as conn:
+                        conn.execute(
+                            "UPDATE alerts SET read = 1 WHERE id = ? AND user_id = ?",
+                            (alert["id"], user["id"])
+                        )
+                    st.rerun()
+
+
+def assistant_page():
+    user = st.session_state.user
+    st.title("CareMate Assistant")
+
+    with db() as conn:
+        history = conn.execute(
+            """SELECT role, content FROM chat_messages
+               WHERE user_id = ? ORDER BY created_at ASC LIMIT 100""",
+            (user["id"],)
+        ).fetchall()
+
+    for message in history:
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
+
+    prompt = st.chat_input("Ask CareMate AI")
+
+    if prompt:
+        with db() as conn:
+            conn.execute(
+                """INSERT INTO chat_messages
+                   (id, user_id, role, content, created_at)
+                   VALUES (?, ?, 'user', ?, ?)""",
+                (new_id(), user["id"], prompt, now_iso())
+            )
+
+        response = ask_ai(user["id"], prompt)
+
+        with db() as conn:
+            conn.execute(
+                """INSERT INTO chat_messages
+                   (id, user_id, role, content, created_at)
+                   VALUES (?, ?, 'assistant', ?, ?)""",
+                (new_id(), user["id"], response, now_iso())
+            )
+
+        st.rerun()
+
+
+def weekly_report_page():
+    user = st.session_state.user
+    st.title("Weekly report")
+
+    week_start = date.today() - timedelta(days=date.today().weekday())
+    week_start_iso = week_start.isoformat()
+
+    if st.button("Generate this week's report", type="primary"):
+        with db() as conn:
+            readings = conn.execute(
+                """SELECT * FROM readings
+                   WHERE user_id = ? AND date(taken_at) >= ?
+                   ORDER BY taken_at""",
+                (user["id"], week_start_iso)
+            ).fetchall()
+
+            doses = conn.execute(
+                """SELECT status, COUNT(*) AS c FROM dose_records
+                   WHERE user_id = ? AND scheduled_date >= ?
+                   GROUP BY status""",
+                (user["id"], week_start_iso)
+            ).fetchall()
+
+            checkins = conn.execute(
+                """SELECT COUNT(*) AS c FROM checkins
+                   WHERE user_id = ? AND checkin_date >= ?""",
+                (user["id"], week_start_iso)
+            ).fetchone()["c"]
+
+            alerts = conn.execute(
+                """SELECT COUNT(*) AS c FROM alerts
+                   WHERE user_id = ? AND date(created_at) >= ?""",
+                (user["id"], week_start_iso)
+            ).fetchone()["c"]
+
+            reading_lines = "\n".join(
+                f"- {r['reading_type']}: {r['value']:g}"
+                + (f"/{r['secondary_value']:g}" if r["secondary_value"] is not None else "")
+                + f" ({r['level']}) on {r['taken_at']}"
+                for r in readings
+            ) or "- No readings recorded this week."
+
+            dose_lines = "\n".join(
+                f"- {d['status']}: {d['c']}" for d in doses
+            ) or "- No dose records this week."
+
+            report = f"""## CareMate weekly report
+Week beginning {week_start_iso}
+
+### Medicines
+{dose_lines}
+
+### Check-ins
+- Completed check-ins: {checkins}
+
+### Alerts
+- Alerts created: {alerts}
+
+### Readings
+{reading_lines}
+
+This report is informational only and does not provide medical diagnosis.
+"""
+
+            conn.execute(
+                """INSERT INTO reports
+                   (id, user_id, week_start, content, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (new_id(), user["id"], week_start_iso, report, now_iso())
+            )
+
+        st.rerun()
+
+    with db() as conn:
+        reports = conn.execute(
+            """SELECT * FROM reports
+               WHERE user_id = ?
+               ORDER BY created_at DESC LIMIT 10""",
+            (user["id"],)
+        ).fetchall()
+
+    if not reports:
+        st.info("No weekly reports generated yet.")
+        return
+
+    for report in reports:
+        with st.expander(f"Week of {report['week_start']} (created {report['created_at']})"):
+            st.markdown(report["content"])
+
+
+def profile_page():
+    user = st.session_state.user
+    st.title("Profile")
+    show_flash()
+
+    with st.form("profile_form"):
+        name = st.text_input("Name", value=user.get("name") or "")
+        age = st.number_input(
+            "Age", min_value=0, max_value=120, value=int(user.get("age") or 0)
+        )
+        conditions = st.text_area(
+            "Health conditions", value=user.get("conditions") or ""
+        )
+        emergency_contact = st.text_input(
+            "Emergency contact", value=user.get("emergency_contact") or ""
+        )
+        submitted = st.form_submit_button("Save profile")
+
+    if submitted:
+        with db() as conn:
+            conn.execute(
+                """UPDATE users
+                   SET name = ?, age = ?, conditions = ?, emergency_contact = ?
+                   WHERE id = ?""",
+                (name.strip(), int(age), conditions.strip(),
+                 emergency_contact.strip(), user["id"])
+            )
+        st.session_state.user = load_user(user["id"]) or user
+        flash("success", "Profile saved.")
+        st.rerun()
+
+
+# -----------------------------
+# Router
+# -----------------------------
+
+sidebar()
+
+page = st.session_state.page
+
+if not st.session_state.user:
+    show_flash()
+    if page == "Create account":
+        signup_page()
+    elif page == "Sign in":
+        signin_page()
+    else:
+        welcome_page()
+else:
+    pages_map = {
+        "Dashboard": dashboard_page,
+        "Today": today_page,
+        "Medicines": medicines_page,
+        "Readings": readings_page,
+        "Check-in": checkin_page,
+        "Alerts": alerts_page,
+        "Assistant": assistant_page,
+        "Weekly report": weekly_report_page,
+        "Profile": profile_page,
+    }
+    pages_map.get(page, dashboard_page)()
