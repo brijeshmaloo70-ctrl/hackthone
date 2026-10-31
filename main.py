@@ -6,6 +6,14 @@ Entry point: initialises all components and runs the 30-day chronic care simulat
 import os
 import sys
 import logging
+
+# -- Fix Windows console encoding --
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 from datetime import datetime
 
 # ── Ensure data/ directory exists BEFORE logging setup ────────────────────────

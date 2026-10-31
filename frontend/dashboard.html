@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard — CareSync AI</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="dashboard.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet" />
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body class="db-body">
+
+  <!-- ── Top Bar ────────────────────────────────────────────────────── -->
+  <header class="topbar">
+    <div class="topbar__left">
+      <a href="index.html" class="nav__logo topbar__logo">
+        <span class="nav__logo-icon">
+          <svg width="24" height="24" viewBox="0 0 28 28" fill="none">
+            <circle cx="14" cy="14" r="14" fill="url(#tGrad)"/>
+            <path d="M8 14h3l2-5 3 10 2-7 2 4h3" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            <defs><linearGradient id="tGrad" x1="0" y1="0" x2="28" y2="28"><stop stop-color="#4F8EF7"/><stop offset="1" stop-color="#7C3AED"/></linearGradient></defs>
+          </svg>
+        </span>
+        <span>CareSync <span class="accent">AI</span></span>
+      </a>
+      <span class="topbar__divider"></span>
+      <span class="topbar__title">Patient Dashboard</span>
+    </div>
+    <div class="topbar__center">
+      <!-- Phase Timeline Pill -->
+      <div class="phase-pills" id="phasePills">
+        <button class="phase-pill phase-pill--green active" data-range="1,10" onclick="setPhase(this,1,10)">Phase 1<br/><small>Days 1–10</small></button>
+        <button class="phase-pill phase-pill--yellow" data-range="11,20" onclick="setPhase(this,11,20)">Phase 2<br/><small>Days 11–20</small></button>
+        <button class="phase-pill phase-pill--orange" data-range="21,27" onclick="setPhase(this,21,27)">Phase 3<br/><small>Days 21–27</small></button>
+        <button class="phase-pill phase-pill--red" data-range="28,30" onclick="setPhase(this,28,30)">Phase 4<br/><small>Days 28–30</small></button>
+        <button class="phase-pill phase-pill--blue" data-range="1,30" onclick="setPhase(this,1,30)">All 30 Days</button>
+      </div>
+    </div>
+    <div class="topbar__right">
+      <div class="sim-controls" id="simControls">
+        <button class="btn btn--primary btn--xs" id="btnPlaySim" onclick="togglePlaySimulation()">
+          <span id="playIcon">▶</span> <span id="playText">Play Sim</span>
+        </button>
+        <button class="btn btn--ghost btn--xs" id="btnResetSim" onclick="resetSimulation()" title="Reset to Day 1">↺</button>
+        <span class="sim-speed-badge" id="speedBadge" onclick="cycleSpeed()" title="Click to change playback speed">1x</span>
+      </div>
+      <span class="topbar__live" id="simLiveBadge"><span class="pulse-dot"></span> <span id="simDayIndicator">Day 1 / 30</span></span>
+      <a href="index.html" class="btn btn--ghost btn--sm">← Home</a>
+    </div>
+  </header>
+
+  <div class="db-layout">
+
+    <!-- ── Sidebar ──────────────────────────────────────────────────── -->
+    <aside class="sidebar">
+      <!-- Patient Card -->
+      <div class="patient-card">
+        <div class="patient-card__avatar">🧓</div>
+        <div class="patient-card__info">
+          <h3>Ramesh Kumar</h3>
+          <span class="badge badge--blue">78M · Patient</span>
+        </div>
+        <div class="patient-card__detail">
+          <div class="patient-detail-row">
+            <span class="pdl">Conditions</span>
+            <span class="pdv">Hypertension, T2 Diabetes</span>
+          </div>
+          <div class="patient-detail-row">
+            <span class="pdl">Doctor</span>
+            <span class="pdv">Dr. Anjali Sharma</span>
+          </div>
+          <div class="patient-detail-row">
+            <span class="pdl">Hospital</span>
+            <span class="pdv">Apollo Hospital, Noida</span>
+          </div>
+          <div class="patient-detail-row">
+            <span class="pdl">Allergies</span>
+            <span class="pdv">Penicillin, Sulfa</span>
+          </div>
+          <div class="patient-detail-row">
+            <span class="pdl">Languages</span>
+            <span class="pdv">Hindi, English</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Escalation Status -->
+      <div class="sidebar-section">
+        <h4 class="sidebar-section__title">Escalation Status</h4>
+        <div class="escalation-meter" id="escalationMeter">
+          <div class="esc-level" data-level="0">
+            <span class="esc-dot esc-dot--green"></span>
+            <div>
+              <strong>Level 0</strong>
+              <p>Normal — All stable</p>
+            </div>
+          </div>
+          <div class="esc-level" data-level="1">
+            <span class="esc-dot esc-dot--yellow"></span>
+            <div>
+              <strong>Level 1</strong>
+              <p>Watch — Minor deviation</p>
+            </div>
+          </div>
+          <div class="esc-level" data-level="2">
+            <span class="esc-dot esc-dot--orange"></span>
+            <div>
+              <strong>Level 2</strong>
+              <p>Warning — Multiple concerns</p>
+            </div>
+          </div>
+          <div class="esc-level esc-level--active" data-level="3">
+            <span class="esc-dot esc-dot--red"></span>
+            <div>
+              <strong>Level 3 ← CURRENT</strong>
+              <p>CRITICAL — Immediate review</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Agent Status -->
+      <div class="sidebar-section">
+        <h4 class="sidebar-section__title">Agent Status</h4>
+        <div class="agent-status-list">
+          <div class="agent-status-item">
+            <span class="agent-status-icon">🤖</span>
+            <div class="agent-status-info">
+              <strong>Asha</strong>
+              <span class="badge badge--green">Active</span>
+            </div>
+            <span class="agent-status-detail">Daily check-ins</span>
+          </div>
+          <div class="agent-status-item">
+            <span class="agent-status-icon">👨‍👩‍👦</span>
+            <div class="agent-status-info">
+              <strong>ConnectAgent</strong>
+              <span class="badge badge--green">Active</span>
+            </div>
+            <span class="agent-status-detail">21 alerts sent</span>
+          </div>
+          <div class="agent-status-item">
+            <span class="agent-status-icon">🩺</span>
+            <div class="agent-status-info">
+              <strong>MedInsight</strong>
+              <span class="badge badge--red">Escalated</span>
+            </div>
+            <span class="agent-status-detail">Level 3 active</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Medication Schedule -->
+      <div class="sidebar-section">
+        <h4 class="sidebar-section__title">Medication Schedule</h4>
+        <div class="med-schedule">
+          <div class="med-slot">
+            <span class="med-slot__time">☀️ Morning</span>
+            <div class="med-list">
+              <div class="med-item">Amlodipine 5mg</div>
+              <div class="med-item">Metformin 500mg</div>
+              <div class="med-item">Aspirin 75mg</div>
+            </div>
+          </div>
+          <div class="med-slot">
+            <span class="med-slot__time">☀️ Afternoon</span>
+            <div class="med-list">
+              <div class="med-item">Metformin 500mg</div>
+            </div>
+          </div>
+          <div class="med-slot">
+            <span class="med-slot__time">🌙 Evening</span>
+            <div class="med-list">
+              <div class="med-item">Losartan 50mg</div>
+              <div class="med-item">Glimepiride 2mg</div>
+              <div class="med-item">Atorvastatin 20mg</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- ── Main Content ───────────────────────────────────────────── -->
+    <main class="db-main">
+
+      <!-- KPI Cards Row -->
+      <div class="kpi-row" id="kpiRow">
+        <div class="kpi-card" data-kpi="bp">
+          <div class="kpi-card__icon" style="--c:#EF4444">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 21.593c-5.63-5.539-11-10.297-11-14.402 0-3.791 3.068-5.191 5.281-5.191 1.312 0 4.151.501 5.719 4.457 1.59-3.968 4.464-4.447 5.726-4.447 2.54 0 5.274 1.621 5.274 5.181 0 4.069-5.136 8.625-11 14.402z" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
+          </div>
+          <div class="kpi-card__body">
+            <span class="kpi-card__label">Avg Blood Pressure</span>
+            <span class="kpi-card__value" id="kpiBP">152.5 / 92</span>
+            <span class="kpi-card__sub kpi-card__sub--warn">↑ Target: 120–140 mmHg</span>
+          </div>
+          <div class="kpi-card__trend" id="kpiBPTrend">
+            <canvas id="sparkBP" width="80" height="36"></canvas>
+          </div>
+        </div>
+
+        <div class="kpi-card" data-kpi="glucose">
+          <div class="kpi-card__icon" style="--c:#F59E0B">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.6"/><path d="M12 8v4l3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </div>
+          <div class="kpi-card__body">
+            <span class="kpi-card__label">Avg Blood Glucose</span>
+            <span class="kpi-card__value" id="kpiGluc">226.5 mg/dL</span>
+            <span class="kpi-card__sub kpi-card__sub--warn">↑ Target: 100–180 mg/dL</span>
+          </div>
+          <div class="kpi-card__trend">
+            <canvas id="sparkGluc" width="80" height="36"></canvas>
+          </div>
+        </div>
+
+        <div class="kpi-card" data-kpi="hr">
+          <div class="kpi-card__icon" style="--c:#4F8EF7">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M2 12h4l2-5 3 10 3-7 2 4h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="kpi-card__body">
+            <span class="kpi-card__label">Avg Heart Rate</span>
+            <span class="kpi-card__value" id="kpiHR">78.6 bpm</span>
+            <span class="kpi-card__sub kpi-card__sub--ok">✓ Normal range</span>
+          </div>
+          <div class="kpi-card__trend">
+            <canvas id="sparkHR" width="80" height="36"></canvas>
+          </div>
+        </div>
+
+        <div class="kpi-card" data-kpi="adherence">
+          <div class="kpi-card__icon" style="--c:#10B981">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M9 11l3 3L22 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </div>
+          <div class="kpi-card__body">
+            <span class="kpi-card__label">Medication Adherence</span>
+            <span class="kpi-card__value kpi-card__value--warn" id="kpiAdh">70.0%</span>
+            <span class="kpi-card__sub kpi-card__sub--warn">🆘 Target: 95%</span>
+          </div>
+          <div class="kpi-card__trend">
+            <canvas id="sparkAdh" width="80" height="36"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Charts Row 1 -->
+      <div class="chart-row">
+        <div class="chart-card chart-card--wide">
+          <div class="chart-card__header">
+            <div>
+              <h3 class="chart-card__title">Blood Pressure Trend (30 Days)</h3>
+              <p class="chart-card__sub">Systolic / Diastolic — danger threshold at 160/100</p>
+            </div>
+            <div class="chart-card__badges">
+              <span class="badge badge--blue">Systolic</span>
+              <span class="badge badge--gray">Diastolic</span>
+            </div>
+          </div>
+          <div class="chart-card__body">
+            <canvas id="chartBP"></canvas>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-card__header">
+            <div>
+              <h3 class="chart-card__title">Escalation Timeline</h3>
+              <p class="chart-card__sub">Alert level per day (0–3)</p>
+            </div>
+          </div>
+          <div class="chart-card__body">
+            <canvas id="chartEsc"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Charts Row 2 -->
+      <div class="chart-row">
+        <div class="chart-card">
+          <div class="chart-card__header">
+            <div>
+              <h3 class="chart-card__title">Blood Glucose</h3>
+              <p class="chart-card__sub">mg/dL — warning at 250, danger at 300</p>
+            </div>
+          </div>
+          <div class="chart-card__body">
+            <canvas id="chartGluc"></canvas>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-card__header">
+            <div>
+              <h3 class="chart-card__title">Heart Rate & Weight</h3>
+              <p class="chart-card__sub">bpm (left) · kg (right)</p>
+            </div>
+          </div>
+          <div class="chart-card__body">
+            <canvas id="chartHRWeight"></canvas>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-card__header">
+            <div>
+              <h3 class="chart-card__title">Mood & Social Score</h3>
+              <p class="chart-card__sub">Mood 1–5 · Social interaction days</p>
+            </div>
+          </div>
+          <div class="chart-card__body">
+            <canvas id="chartMoodSocial"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Day-by-Day Vitals Table -->
+      <div class="table-card">
+        <div class="table-card__header">
+          <div>
+            <h3>30-Day Vitals Log</h3>
+            <p>Complete daily record — click any row to inspect full agent transcripts &amp; parameters</p>
+          </div>
+          <div class="table-card__controls" style="display:flex;gap:0.5rem;align-items:center;">
+            <input class="table-search" id="tableSearch" type="text" placeholder="Search day, phase, symptom…" />
+            <button class="btn btn--ghost btn--sm" onclick="exportTableCSV()" title="Download CSV">Export CSV ⤓</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="vitals-table" id="vitalsTable">
+            <thead>
+              <tr>
+                <th>Day</th>
+                <th>Date</th>
+                <th>Phase</th>
+                <th>BP (sys/dia)</th>
+                <th>HR</th>
+                <th>Glucose</th>
+                <th>Weight</th>
+                <th>Meds</th>
+                <th>Social</th>
+                <th>Mood</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="vitalsTableBody">
+              <!-- populated by JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Bottom Row -->
+      <div class="bottom-row">
+
+        <!-- Summary Stats -->
+        <div class="summary-card">
+          <h3 class="summary-card__title">30-Day Summary</h3>
+          <div class="summary-stats">
+            <div class="summary-stat">
+              <span class="summary-stat__val" style="color:var(--red)">152.5</span>
+              <span class="summary-stat__lbl">Avg Systolic mmHg</span>
+            </div>
+            <div class="summary-stat">
+              <span class="summary-stat__val" style="color:var(--amber)">226.5</span>
+              <span class="summary-stat__lbl">Avg Glucose mg/dL</span>
+            </div>
+            <div class="summary-stat">
+              <span class="summary-stat__val" style="color:var(--blue)">78.6</span>
+              <span class="summary-stat__lbl">Avg Heart Rate bpm</span>
+            </div>
+            <div class="summary-stat">
+              <span class="summary-stat__val" style="color:var(--red)">70%</span>
+              <span class="summary-stat__lbl">Medication Adherence</span>
+            </div>
+            <div class="summary-stat">
+              <span class="summary-stat__val" style="color:var(--amber)">+1.5 kg</span>
+              <span class="summary-stat__lbl">Weight Change</span>
+            </div>
+            <div class="summary-stat">
+              <span class="summary-stat__val" style="color:var(--orange)">12</span>
+              <span class="summary-stat__lbl">Isolation Days</span>
+            </div>
+            <div class="summary-stat">
+              <span class="summary-stat__val" style="color:var(--red)">21</span>
+              <span class="summary-stat__lbl">Caregiver Alerts</span>
+            </div>
+            <div class="summary-stat">
+              <span class="summary-stat__val" style="color:var(--green)">18/30</span>
+              <span class="summary-stat__lbl">Social Interaction Days</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Clinical Recommendations -->
+        <div class="recs-card">
+          <h3 class="recs-card__title">
+            <span>🩺</span> Clinical Recommendations
+            <span class="badge badge--blue" style="margin-left:auto">MedInsightAgent</span>
+          </h3>
+          <ol class="recs-list">
+            <li>
+              <strong>Antihypertensive Review</strong>
+              <p>BP consistently elevated (avg 152.5 mmHg). Intensify regimen.</p>
+            </li>
+            <li>
+              <strong>Glycaemic Control</strong>
+              <p>Mean glucose 226.5 mg/dL. Request HbA1c. Consider endocrinology referral.</p>
+            </li>
+            <li>
+              <strong>Medication Adherence</strong>
+              <p>70.0% — Critical: implement pill organiser, daily voice reminder.</p>
+            </li>
+            <li>
+              <strong>Social Prescription</strong>
+              <p>12 days isolation. Screen for depression; community referral recommended.</p>
+            </li>
+            <li>
+              <strong>Weight Management</strong>
+              <p>+1.5 kg in 30 days. Dietary review — reduce sodium and refined carbs.</p>
+            </li>
+            <li>
+              <strong>Family Involvement</strong>
+              <p>Invite caregiver Suresh to next appointment for care plan review.</p>
+            </li>
+          </ol>
+        </div>
+
+        <!-- Event Log -->
+        <div class="events-card">
+          <h3 class="events-card__title">Key Events</h3>
+          <div class="event-log" id="eventLog">
+            <div class="event-item event-item--green">
+              <span class="event-dot"></span>
+              <div>
+                <strong>Day 7 — Weekly Summary Sent</strong>
+                <p>ConnectAgent sent first weekly summary to Suresh. All vitals normal.</p>
+              </div>
+              <span class="event-day">D7</span>
+            </div>
+            <div class="event-item event-item--yellow">
+              <span class="event-dot"></span>
+              <div>
+                <strong>Day 14 — BP Trend Alert</strong>
+                <p>MedInsightAgent detected rising BP trend over 7 days. Level 1 escalation.</p>
+              </div>
+              <span class="event-day">D14</span>
+            </div>
+            <div class="event-item event-item--yellow">
+              <span class="event-dot"></span>
+              <div>
+                <strong>Day 19 — Adherence Alert</strong>
+                <p>Medication adherence dropped below 80%. Caregiver notified via WhatsApp.</p>
+              </div>
+              <span class="event-day">D19</span>
+            </div>
+            <div class="event-item event-item--orange">
+              <span class="event-dot"></span>
+              <div>
+                <strong>Day 22 — Level 2 Escalation</strong>
+                <p>BP 165–175, glucose 280–310. Doctor and family alerted via WhatsApp.</p>
+              </div>
+              <span class="event-day">D22</span>
+            </div>
+            <div class="event-item event-item--orange">
+              <span class="event-dot"></span>
+              <div>
+                <strong>Day 24 — Social Isolation</strong>
+                <p>5 consecutive days without social interaction. Patient nudged; family alert sent.</p>
+              </div>
+              <span class="event-day">D24</span>
+            </div>
+            <div class="event-item event-item--red">
+              <span class="event-dot"></span>
+              <div>
+                <strong>Day 28 — CRITICAL Level 3</strong>
+                <p>Emergency voice call to patient. SMS + WhatsApp to Suresh. Doctor briefed.</p>
+              </div>
+              <span class="event-day">D28</span>
+            </div>
+            <div class="event-item event-item--blue">
+              <span class="event-dot"></span>
+              <div>
+                <strong>Day 30 — Doctor Visit Report</strong>
+                <p>30-day pre-visit clinical summary generated and sent to Dr. Anjali Sharma.</p>
+              </div>
+              <span class="event-day">D30</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Doctor Report Preview -->
+      <div class="report-card">
+        <div class="report-card__header">
+          <div>
+            <h3>Pre-Visit Clinical Report</h3>
+            <p>Auto-generated by MedInsightAgent · Day 30 · Dr. Anjali Sharma</p>
+          </div>
+          <div style="display:flex;gap:0.75rem;align-items:center;">
+            <button class="btn btn--primary btn--sm" id="btnViewReport" onclick="openReportModal()">
+              <span>📄 View Full Report</span>
+            </button>
+            <span class="badge badge--blue">Generated Nov 1, 2026</span>
+          </div>
+        </div>
+        <div class="report-card__body">
+          <div class="report-meta-grid">
+            <div class="report-meta-item">
+              <span class="rml">Patient</span>
+              <span class="rmv">Ramesh Kumar, 78M</span>
+            </div>
+            <div class="report-meta-item">
+              <span class="rml">Conditions</span>
+              <span class="rmv">Hypertension, T2 Diabetes</span>
+            </div>
+            <div class="report-meta-item">
+              <span class="rml">Allergies</span>
+              <span class="rmv">Penicillin, Sulfa drugs</span>
+            </div>
+            <div class="report-meta-item">
+              <span class="rml">Doctor</span>
+              <span class="rmv">Dr. Anjali Sharma</span>
+            </div>
+            <div class="report-meta-item">
+              <span class="rml">Period</span>
+              <span class="rmv">30-day monitoring (Nov 1–30, 2024)</span>
+            </div>
+            <div class="report-meta-item">
+              <span class="rml">Peak Escalation</span>
+              <span class="rmv"><span class="badge badge--red">Level 3 / 3</span></span>
+            </div>
+          </div>
+        </div>
+        <div class="report-card__footer">
+          <em>Full report saved to <code>reports/doctor_report_20261101_020948.md</code> — Click "View Full Report" above to inspect complete markdown summary.</em>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- ── Day Inspector Modal ────────────────────────────────────────── -->
+  <div class="modal-backdrop" id="dayModal" onclick="closeDayModal(event)">
+    <div class="modal-card" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span class="badge badge--blue" id="mPhaseBadge">Phase 1</span>
+          <h2 id="mDayTitle">Day 1 Details · 2024-11-01</h2>
+        </div>
+        <button class="modal-close" onclick="closeDayModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="mBody">
+        <!-- Injected by JS -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Clinical Report Modal ──────────────────────────────────────── -->
+  <div class="modal-backdrop" id="reportModal" onclick="closeReportModal(event)">
+    <div class="modal-card modal-card--lg" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span class="badge badge--purple">MedInsightAgent</span>
+          <h2>Pre-Visit Clinical Report (30-Day Monitoring)</h2>
+        </div>
+        <div style="display:flex;gap:0.5rem;align-items:center;">
+          <button class="btn btn--ghost btn--sm" onclick="window.print()">Print 🖨️</button>
+          <button class="modal-close" onclick="closeReportModal()">&times;</button>
+        </div>
+      </div>
+      <div class="modal-body modal-body--scroll" id="reportModalBody">
+        <!-- Rendered Report -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Floating Chat FAB & Drawer ─────────────────────────────────── -->
+  <button class="chat-fab" id="chatFab" onclick="toggleChat()" title="Talk to Asha (Patient Agent)">
+    <span class="chat-fab__icon">🤖</span>
+    <span class="chat-fab__label">Talk to Asha</span>
+  </button>
+
+  <div class="chat-drawer" id="chatDrawer">
+    <div class="chat-drawer__header">
+      <div class="chat-drawer__user">
+        <div class="chat-drawer__avatar">🤖</div>
+        <div>
+          <h4>Asha (Patient Agent)</h4>
+          <span class="chat-drawer__sub"><span class="pulse-dot"></span> Bilingual Companion · Hindi / English</span>
+        </div>
+      </div>
+      <button class="modal-close" onclick="toggleChat()">&times;</button>
+    </div>
+    <div class="chat-drawer__messages" id="chatMessages">
+      <!-- Chat bubbles -->
+    </div>
+    <div class="chat-drawer__quick" id="chatQuickPills">
+      <button class="quick-pill" onclick="sendQuickChat('नमस्ते आशा, आज मेरी तबीयत ठीक है')">नमस्ते आशा, तबीयत ठीक है</button>
+      <button class="quick-pill" onclick="sendQuickChat('I feel a bit dizzy and have a headache')">Feeling dizzy &amp; headache</button>
+      <button class="quick-pill" onclick="sendQuickChat('आज सुबह की दवाई लेना भूल गया था')">दवाई लेना भूल गया</button>
+      <button class="quick-pill" onclick="sendQuickChat('Can you check my current health status?')">Check my status</button>
+    </div>
+    <form class="chat-drawer__input-bar" id="chatForm" onsubmit="handleChatSubmit(event)">
+      <input type="text" id="chatInput" placeholder="Message Asha in Hindi or English…" autocomplete="off" />
+      <button type="submit" class="btn btn--primary btn--sm">Send</button>
+    </form>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>
