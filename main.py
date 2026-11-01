@@ -91,6 +91,7 @@ def main():
     # ── 2. Initialise core components ────────────────────────────────────
     print_step("Memory Store", "SQLite longitudinal patient memory initialised", "green")
     memory = PatientMemory(db_path=DB_CONFIG["path"])
+    memory.reset()  # fresh 30-day run — previous runs used to pile up duplicate rows
 
     print_step("Care Plan", "Shared evolving care plan created for Ramesh Kumar", "green")
     care_plan = initialize_care_plan(
@@ -141,18 +142,20 @@ def main():
     )
 
     # ── 4. LLM status ────────────────────────────────────────────────────
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if _rich_available:
-        if api_key:
-            console.print("  [bold green]✅ Gemini API Key detected — using LLM responses[/bold green]")
-        else:
-            console.print(
-                "  [yellow]⚠️  No GEMINI_API_KEY found — using template-based responses "
-                "(set GEMINI_API_KEY in .env for LLM)[/yellow]"
-            )
+    # Real connectivity test (the old check only looked for a non-empty key)
+    from core.llm import get_llm
+    llm_status = get_llm().status(live_test=True)
+    live = llm_status.get("live_test", {})
+    if not llm_status["configured"]:
+        status = "⚠️  No GEMINI_API_KEY — template-based responses"
+    elif live.get("ok"):
+        status = f"✅ Gemini reachable (model: {live['model']})"
     else:
-        status = "Gemini API active" if api_key else "Template mode (no API key)"
-        print(f"  LLM Status: {status}")
+        status = f"❌ Gemini key set but calls failing — {live.get('error', '')[:160]}"
+    if _rich_available:
+        console.print(f"  [bold]LLM:[/bold] {status}")
+    else:
+        print(f"  LLM: {status}")
 
     # ── 5. Generate 30-day simulation data ───────────────────────────────
     print_step("Simulation Data", "30-day patient timeline generated", "blue")
@@ -175,6 +178,15 @@ def main():
     )
 
     runner.run()
+
+    # ── 6b. Write enriched timeline JSON for the web server ───────────────
+    import json as _json
+    enriched_timeline = timeline  # already a list of dicts
+    timeline_path = os.path.join("data", "timeline_enriched.json")
+    with open(timeline_path, "w", encoding="utf-8") as _tf:
+        _json.dump(enriched_timeline, _tf, ensure_ascii=False, indent=2)
+    if _rich_available:
+        console.print(f"  [green]✅ Timeline JSON saved to {timeline_path}[/green]")
 
     # ── 7. Generate doctor report ─────────────────────────────────────────
     if _rich_available:

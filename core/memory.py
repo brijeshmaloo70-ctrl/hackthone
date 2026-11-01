@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import json
+import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -108,6 +109,20 @@ class PatientMemory:
                 alert_id        TEXT,
                 action_taken    TEXT    NOT NULL,
                 notes           TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS caregiver_alerts (
+                alert_id        TEXT    PRIMARY KEY,
+                patient_id      TEXT    NOT NULL,
+                day             INTEGER NOT NULL,
+                timestamp       TEXT    NOT NULL,
+                urgency         TEXT    NOT NULL,
+                source          TEXT,
+                message         TEXT    NOT NULL,
+                acknowledged    INTEGER DEFAULT 0,
+                action_taken    TEXT,
+                notes           TEXT,
+                acknowledged_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS care_plan_proposals (
@@ -341,6 +356,65 @@ class PatientMemory:
         )
         self._conn.commit()
         return cur.lastrowid
+
+    # ─── Caregiver alerts (persistent, so they survive server restarts) ────
+
+    def add_caregiver_alert(
+        self,
+        patient_id: str,
+        day: int,
+        urgency: str,
+        message: str,
+        source: str = "ConnectAgent",
+    ) -> Dict[str, Any]:
+        alert = {
+            "alert_id": f"alert_{uuid.uuid4().hex[:10]}",
+            "patient_id": patient_id,
+            "day": day,
+            "timestamp": datetime.now().isoformat(),
+            "urgency": urgency,
+            "source": source,
+            "message": message,
+            "acknowledged": False,
+            "action_taken": None,
+            "notes": None,
+            "acknowledged_at": None,
+        }
+        self._conn.execute(
+            """INSERT INTO caregiver_alerts
+               (alert_id, patient_id, day, timestamp, urgency, source, message)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (alert["alert_id"], patient_id, day, alert["timestamp"], urgency, source, message),
+        )
+        self._conn.commit()
+        return alert
+
+    def get_caregiver_alerts(self, patient_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Newest first. Unacknowledged critical alerts are what the UI surfaces first."""
+        rows = self._fetch_rows(
+            "SELECT * FROM caregiver_alerts WHERE patient_id=? ORDER BY timestamp DESC LIMIT ?",
+            (patient_id, limit),
+        )
+        for r in rows:
+            r["acknowledged"] = bool(r["acknowledged"])
+        return rows
+
+    def get_caregiver_alert(self, alert_id: str) -> Optional[Dict[str, Any]]:
+        rows = self._fetch_rows("SELECT * FROM caregiver_alerts WHERE alert_id=?", (alert_id,))
+        if not rows:
+            return None
+        rows[0]["acknowledged"] = bool(rows[0]["acknowledged"])
+        return rows[0]
+
+    def acknowledge_caregiver_alert(self, alert_id: str, action_taken: str, notes: str = "") -> bool:
+        cur = self._conn.execute(
+            """UPDATE caregiver_alerts
+               SET acknowledged=1, action_taken=?, notes=?, acknowledged_at=?
+               WHERE alert_id=?""",
+            (action_taken, notes, datetime.now().isoformat(), alert_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
 
     def get_caregiver_actions(self, patient_id: str, limit: int = 20) -> List[Dict[str, Any]]:
         return self._fetch_rows(
@@ -578,6 +652,18 @@ class PatientMemory:
         cur.execute("SELECT MAX(day) FROM vitals WHERE patient_id=?", (patient_id,))
         row = cur.fetchone()
         return row[0] if row and row[0] is not None else 1
+
+    def reset(self) -> None:
+        """Wipe all patient data. Called at the start of each simulation run —
+        without this, every `python main.py` appended another 30 days of rows
+        and skewed every average/adherence stat."""
+        cur = self._conn.cursor()
+        tables = [r[0] for r in cur.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        )]
+        for t in tables:
+            cur.execute(f'DELETE FROM "{t}"')
+        self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()

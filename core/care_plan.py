@@ -198,9 +198,19 @@ class CarePlan:
         return False
 
     def _apply_approved_update(self, category: str, new_value: Any) -> None:
-        """Internal helper to apply approved change to state."""
+        """Apply an approved change.
+        A free-text change to a structured field (e.g. "Increase Amlodipine to 10mg" for the
+        medications list) is recorded as an amendment instead of replacing the whole list/dict —
+        previously approving it wiped the medication list with a string."""
         if hasattr(self, category):
-            setattr(self, category, new_value)
+            current = getattr(self, category)
+            stamp = datetime.now().isoformat()
+            if isinstance(current, list) and not isinstance(new_value, list):
+                current.append({"name": "Amendment", "change": new_value, "approved_at": stamp})
+            elif isinstance(current, dict) and not isinstance(new_value, dict):
+                current.setdefault("approved_changes", []).append({"change": new_value, "approved_at": stamp})
+            else:
+                setattr(self, category, new_value)
         elif category in self.goals:
             self.goals[category] = new_value
 

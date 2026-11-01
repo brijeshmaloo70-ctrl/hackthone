@@ -6,8 +6,11 @@ across English, Hindi (हिन्दी), and Marathi (मराठी) withou
 Integrates gracefully with Gemini LLM when API key is present.
 """
 
+import logging
 import re
 from typing import Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 class AshaConversationalEngine:
     def __init__(self, gemini_client=None):
@@ -58,10 +61,13 @@ class AshaConversationalEngine:
         if self.gemini_client:
             try:
                 lang_name = {"hi": "Hindi (Devanagari script)", "mr": "Marathi (मराठी script)", "en": "warm English"}.get(lang, "Hindi")
+                ctx_lines = "\n".join(f"- {k}: {v}" for k, v in context.items()) or "- (no stored history)"
                 prompt = f"""You are Asha, a loving, respectful, and clinically wise AI healthcare companion for Ramesh Kumar (78M, has Hypertension and Type 2 Diabetes).
 Patient language: {lang_name}.
 Current Day: Day {day} of 30.
-Vitals context: BP normally ~145/88, taking Amlodipine 5mg and Metformin 500mg.
+Medications: Amlodipine 5mg, Metformin 500mg (x2), Aspirin 75mg, Losartan 50mg, Glimepiride 2mg, Atorvastatin 20mg.
+Longitudinal memory (from the patient database):
+{ctx_lines}
 User message: "{msg_raw}"
 
 Instructions:
@@ -76,17 +82,25 @@ Instructions:
                         "reply": res.text.strip(),
                         "alert_level": alert_level,
                         "caregiver_alert": caregiver_alert,
-                        "llm_used": True
+                        "llm_used": True,
+                        "model": getattr(res, "model", None),
                     }
-            except Exception:
-                pass
+            except Exception as exc:
+                # Previously swallowed silently — now logged and surfaced in the response
+                logger.warning(f"[Asha] Gemini call failed, using fallback: {exc}")
+                llm_error = str(exc)[:300]
+            else:
+                llm_error = None
+        else:
+            llm_error = "GEMINI_API_KEY not configured"
 
         # 4. Comprehensive Deterministic & Semantic Response Engine
         return {
             "reply": self._synthesize_response(msg_lower, lang, alert_level, context),
             "alert_level": alert_level,
             "caregiver_alert": caregiver_alert,
-            "llm_used": False
+            "llm_used": False,
+            "llm_error": llm_error,
         }
 
     def _synthesize_response(self, q: str, lang: str, alert_level: int, ctx: Dict[str, Any]) -> str:

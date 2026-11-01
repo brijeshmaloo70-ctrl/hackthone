@@ -44,24 +44,17 @@ class BaseAgent(ABC):
     # ─── LLM Initialisation ────────────────────────────────────────────────
 
     def _init_llm(self) -> None:
-        """Attempt to initialise the Gemini client. Fall back silently if unavailable."""
-        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-        if not api_key:
-            logger.info(
-                f"[{self.name}] GEMINI_API_KEY not set — using template-based responses."
-            )
+        """Use the shared REST Gemini client (core/llm.py). Falls back to templates if no key."""
+        from core.llm import get_llm
+
+        client = get_llm()
+        if not client.configured:
+            logger.info(f"[{self.name}] GEMINI_API_KEY not set — using template-based responses.")
             self._llm_available = False
             return
-        try:
-            import google.generativeai as genai  # type: ignore
-
-            genai.configure(api_key=api_key)
-            self._llm_client = genai.GenerativeModel("gemini-1.5-flash")
-            self._llm_available = True
-            logger.info(f"[{self.name}] Gemini API initialised successfully.")
-        except Exception as exc:
-            logger.warning(f"[{self.name}] Could not initialise Gemini: {exc}")
-            self._llm_available = False
+        self._llm_client = client
+        self._llm_available = True
+        logger.info(f"[{self.name}] Gemini client ready (models: {', '.join(client.models)}).")
 
     # ─── LLM Call ──────────────────────────────────────────────────────────
 

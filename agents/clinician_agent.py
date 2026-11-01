@@ -123,6 +123,36 @@ class ClinicianAgent(BaseAgent):
             "baseline": values[0] if values else None,
         }
 
+    def generate_escalation_alert(self, vitals: Dict[str, Any], trend: Dict[str, Any]) -> str:
+        """Structured doctor alert for an out-of-range reading plus its 7-day trend.
+        (Was called by _on_vitals_alert but never defined → AttributeError on every
+        VITALS_ALERT, so doctors never received vitals-trend alerts.)"""
+        day = vitals.get("day", self.care_plan.current_day)
+        bp = f"{vitals.get('bp_systolic', '?')}/{vitals.get('bp_diastolic', '?')}"
+        gluc = vitals.get("blood_glucose", "?")
+        direction = trend.get("trend_direction", "stable")
+        pct = trend.get("pct_change", 0.0)
+        flags = []
+        if vitals.get("bp_systolic", 0) >= VITAL_THRESHOLDS["bp_systolic"]["danger_high"]:
+            flags.append("systolic BP above danger threshold (160)")
+        elif vitals.get("bp_systolic", 0) >= VITAL_THRESHOLDS["bp_systolic"]["warning_high"]:
+            flags.append("systolic BP above warning threshold (150)")
+        if vitals.get("blood_glucose", 0) >= VITAL_THRESHOLDS["blood_glucose"]["danger_high"]:
+            flags.append("glucose above danger threshold (300)")
+        elif vitals.get("blood_glucose", 0) >= VITAL_THRESHOLDS["blood_glucose"]["warning_high"]:
+            flags.append("glucose above warning threshold (250)")
+        if not vitals.get("medication_taken", True):
+            flags.append("medication missed today")
+
+        return (
+            f"⚠️ MedInsight Vitals Alert — Day {day}\n"
+            f"Patient: {self.patient_name} (78M) | Escalation level {self.care_plan.escalation_level}\n"
+            f"Reading: BP {bp} mmHg, glucose {gluc} mg/dL\n"
+            f"7-day {trend.get('metric', 'bp_systolic')} trend: {direction} ({pct:+.1f}%)\n"
+            f"Flags: {'; '.join(flags) or 'borderline values'}\n"
+            f"Medication adherence: {self.care_plan.medication_adherence_pct}%"
+        )
+
     def check_escalation(self, vitals: Dict[str, Any]) -> bool:
         """Check if single reading breaches warning/danger thresholds."""
         bp_sys = vitals.get("bp_systolic", 0)

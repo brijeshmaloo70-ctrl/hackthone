@@ -27,3 +27,7 @@ Thumbs.db
 .vscode/
 *.swp
 
+
+# React frontend
+react-frontend/node_modules/
+react-frontend/dist/

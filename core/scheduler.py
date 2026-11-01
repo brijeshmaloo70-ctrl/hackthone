@@ -117,10 +117,24 @@ class AutonomousScheduler:
 
     # ─── Job Handlers ──────────────────────────────────────────────────────
 
+    @staticmethod
+    def _normalize(day: int, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Agents expect mood as int 1-5; the API may send words like 'tired'."""
+        ctx = dict(context)
+        ctx["day"] = day
+        mood = ctx.get("mood", 3)
+        if isinstance(mood, str):
+            ctx["mood"] = {"happy": 5, "calm": 4, "okay": 3, "tired": 2, "sad": 2, "dizzy": 1}.get(mood.lower(), 3)
+        ctx.setdefault("symptoms", [])
+        return ctx
+
     def _run_morning_checkin(self, day: int, context: Dict[str, Any]) -> str:
         msg = f"[Scheduler 08:00 AM] Proactive Morning Check-in executed for Day {day}."
         if self.patient_agent:
-            self.patient_agent.conduct_checkin(context)
+            # Full pipeline: logs vitals/meds/social to memory and fires VITALS_ALERT /
+            # MEDICATION_MISSED / CHECKIN_COMPLETED → Risk, Clinician, Caregiver agents react.
+            # (Previously only built a greeting string, so nothing downstream ever ran.)
+            msg = "[Scheduler 08:00 AM] " + self.patient_agent.run_check_in(self._normalize(day, context))
         self.event_bus.publish(
             event_type=EventType.SCHEDULE_TRIGGERED,
             data={"job": "morning_checkin", "time": "08:00", "day": day},
@@ -131,6 +145,9 @@ class AutonomousScheduler:
 
     def _run_med_verification(self, day: int, context: Dict[str, Any]) -> str:
         taken = context.get("medication_taken", True)
+        if not taken and self.patient_agent:
+            # PatientAgent's check-in already published MEDICATION_MISSED — avoid a duplicate alert
+            return f"[Scheduler 09:00 AM] Medication missed on Day {day} — caregiver already alerted by Asha."
         if not taken and self.caregiver_agent:
             self.event_bus.publish(
                 event_type=EventType.MEDICATION_MISSED,
@@ -143,12 +160,14 @@ class AutonomousScheduler:
 
     def _run_activity_prompt(self, day: int, context: Dict[str, Any]) -> str:
         if self.social_agent:
-            self.social_agent.evaluate_social_health(day, context)
+            self.social_agent.evaluate_social_health(day, self._normalize(day, context))
         return f"[Scheduler 01:00 PM] Midday wellbeing and activity prompt dispatched for Day {day}."
 
     def _run_evening_assessment(self, day: int, context: Dict[str, Any]) -> str:
         if self.risk_agent:
-            self.risk_agent.evaluate_health_record(context, day=day)
+            ev = self.risk_agent.evaluate_health_record(self._normalize(day, context), day=day)
+            return (f"[Scheduler 07:00 PM] Evening assessment Day {day}: {ev['risk_level']} — "
+                    f"escalation level {self.care_plan.escalation_level}.")
         return f"[Scheduler 07:00 PM] Evening physiological assessment completed for Day {day}."
 
     # ─── Execution Methods ─────────────────────────────────────────────────

@@ -61,6 +61,13 @@ class CaregiverAgent(BaseAgent):
         self.event_bus.subscribe(EventType.SOCIAL_ISOLATION_DETECTED, self._on_isolation)
         self.event_bus.subscribe(EventType.MEDICATION_MISSED, self._on_medication_missed)
         self.event_bus.subscribe(EventType.RISK_ALERT_ISSUED, self._on_risk_alert)
+        self.event_bus.subscribe(EventType.SOCIAL_INTERVENTION_TRIGGERED, self._on_social_intervention)
+
+    def _on_social_intervention(self, event: Event) -> None:
+        """SocialWellbeingAgent already WhatsApp'd the family — record it so Suresh can acknowledge it."""
+        msg = event.data.get("caregiver_message")
+        if msg:
+            self.notify_family(msg, urgency="moderate", day=event.day, source="SocialWellbeingAgent", deliver=False)
 
     # ─── Event Handlers ────────────────────────────────────────────────────
 
@@ -121,15 +128,31 @@ class CaregiverAgent(BaseAgent):
 
         return f"[Day {day}] Caregiver monitoring active — no alerts required"
 
-    def notify_family(self, message: str, urgency: str = "normal", day: int = 0) -> None:
-        """Send notification via WhatsApp (and SMS if critical)."""
-        alert_id = f"alert_d{day}_{len(self.notifications_sent) + 1}"
+    def notify_family(
+        self,
+        message: str,
+        urgency: str = "normal",
+        day: int = 0,
+        source: str = "ConnectAgent",
+        deliver: bool = True,
+    ) -> Dict[str, Any]:
+        """Send notification via WhatsApp (and SMS if critical) and store it as an acknowledgeable alert."""
+        # Persist first: alerts used to live only in this process's memory, so the
+        # caregiver hub was empty after every server restart and after `python main.py`.
+        alert = self.memory.add_caregiver_alert(
+            patient_id=self.patient_id, day=day, urgency=urgency, message=message, source=source,
+        )
+
+        if not deliver:  # already delivered by another agent; just make it acknowledgeable
+            self.notifications_sent.append(alert)
+            return alert
 
         # 1. WhatsApp message
         self.whatsapp.send_message(
             recipient=self.caregiver_phone,
             message=message,
             sender_name=self.name,
+            message_type="urgent_alert" if urgency == "critical" else "text",
         )
 
         # 2. SMS if critical
@@ -141,26 +164,18 @@ class CaregiverAgent(BaseAgent):
             )
 
         self.care_plan.add_caregiver_alert(message=message, urgency=urgency)
-        alert_record = {
-            "alert_id": alert_id,
-            "day": day,
-            "urgency": urgency,
-            "message": message,
-            "timestamp": datetime.now().isoformat(),
-            "acknowledged": False,
-        }
-        self.notifications_sent.append(alert_record)
+        self.notifications_sent.append(alert)
         logger.info(f"[{self.name}] Notified caregiver (urgency={urgency}) on day {day}")
+        return alert
 
-    def acknowledge_alert(self, alert_id: str, action_taken: str, notes: str = "") -> Dict[str, Any]:
-        """Record caregiver acknowledgment and concrete follow-up action taken."""
-        day = self.care_plan.current_day
-        for alert in self.notifications_sent:
-            if alert["alert_id"] == alert_id:
-                alert["acknowledged"] = True
-                alert["action_taken"] = action_taken
-                alert["acknowledged_at"] = datetime.now().isoformat()
-                break
+    def acknowledge_alert(self, alert_id: str, action_taken: str, notes: str = "") -> Optional[Dict[str, Any]]:
+        """Record caregiver acknowledgment + follow-up action.
+        Returns None if the alert does not exist (previously any id was 'acknowledged')."""
+        alert = self.memory.get_caregiver_alert(alert_id)
+        if alert is None:
+            return None
+        day = alert["day"]
+        self.memory.acknowledge_caregiver_alert(alert_id, action_taken, notes)
 
         self.memory.log_caregiver_action(
             patient_id=self.patient_id,
@@ -197,6 +212,9 @@ class CaregiverAgent(BaseAgent):
         adherence = self.memory.get_medication_adherence(self.patient_id, days=7)
         social = self.memory.get_social_summary(self.patient_id, days=7)
         actions = self.memory.get_caregiver_actions(self.patient_id, limit=10)
+        alerts = self.memory.get_caregiver_alerts(self.patient_id, limit=100)
+        vitals = self.memory.get_all_vitals(self.patient_id)
+        latest = vitals[-1] if vitals else None
 
         return {
             "patient": {
@@ -215,7 +233,15 @@ class CaregiverAgent(BaseAgent):
             "adherence_7d_pct": adherence["adherence_pct"],
             "social_interaction_days_7d": social["interaction_days"],
             "isolation_days_7d": social["isolation_days"],
-            "notifications": self.notifications_sent[-15:],
+            "notifications": alerts,
+            "unacknowledged_count": sum(1 for a in alerts if not a["acknowledged"]),
+            "latest_vitals": {
+                "day": latest["day"],
+                "bp_systolic": latest["bp_systolic"],
+                "bp_diastolic": latest["bp_diastolic"],
+                "blood_glucose": latest["blood_glucose"],
+                "heart_rate": latest["heart_rate"],
+            } if latest else None,
             "recent_actions": actions,
         }
 

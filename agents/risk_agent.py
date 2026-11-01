@@ -50,6 +50,7 @@ class RiskAnalysisAgent(BaseAgent):
         self.patient_name = PATIENT_PROFILE["name"]
         self.thresholds = VITAL_THRESHOLDS
         self._alerts_history: List[Dict[str, Any]] = []
+        self._dispatched: set = set()
 
         # Subscribe to vitals alerts and check-in completion
         self.event_bus.subscribe(EventType.VITALS_ALERT, self._on_vitals_alert)
@@ -163,6 +164,12 @@ class RiskAnalysisAgent(BaseAgent):
 
     def _dispatch_risk_alert(self, evaluation: Dict[str, Any], day: int) -> None:
         """Publish structured risk alert on event bus and log into memory."""
+        # Dedupe: VITALS_ALERT and CHECKIN_COMPLETED both fire for the same reading,
+        # which used to send the family/doctor two identical alerts per day.
+        key = (day, evaluation["risk_level"])
+        if key in self._dispatched:
+            return
+        self._dispatched.add(key)
         self.event_bus.publish(
             event_type=EventType.RISK_ALERT_ISSUED,
             data=evaluation,
@@ -194,6 +201,16 @@ class RiskAnalysisAgent(BaseAgent):
             severity="critical" if evaluation["risk_level"] in [RiskLevel.HIGH, RiskLevel.EMERGENCY] else "warning",
             agent_name=self.name,
         )
+
+    def assess(self, record: Dict[str, Any], day: int = 0) -> Dict[str, Any]:
+        """Evaluate AND act: dispatch alert + escalate when risk is not Normal.
+        evaluate_health_record() alone only computes — callers outside the event bus
+        (live check-in API) previously got a result but no alert/escalation ever fired."""
+        evaluation = self.evaluate_health_record(record, day=day)
+        if evaluation["risk_level"] != RiskLevel.NORMAL:
+            self._dispatch_risk_alert(evaluation, day=day)
+        evaluation["escalation_level"] = self.care_plan.escalation_level
+        return evaluation
 
     def run_check_in(self, patient_data: Dict[str, Any]) -> str:
         """Called daily to execute physiological monitoring."""

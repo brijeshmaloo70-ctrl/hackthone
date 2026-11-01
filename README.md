@@ -1,592 +1,241 @@
-# 🏥 AI Proactive Chronic Care Management System
-
-> **Hackathon Track 4: Healthcare & Social Impact — HEALTH-01**  
-> *Proactive Agents for Chronic Care and Healthy Ageing*
-
----
-
-## 🎯 Problem Statement
-
-Elderly patients with chronic conditions like hypertension and diabetes often go weeks without proactive care monitoring between doctor visits. Family caregivers are out of the loop. Doctors see patients too infrequently to catch dangerous deteriorating trends early. This leads to preventable hospitalisations and crises.
-
-## 💡 Our Solution
-
-A **network of three coordinating AI agents** built around an elderly patient — all sharing one evolving care plan — that proactively manages chronic care 24/7:
-
-| Agent | Role |
-|-------|------|
-| 🤖 **Asha (Patient Agent)** | Calls/messages the patient in Hindi/English, tracks medicines, vitals, mood, social connection |
-| 👨‍👩‍👦 **ConnectAgent (Caregiver Agent)** | Keeps family in the loop with smart alerts and weekly summaries |
-| 🩺 **MedInsightAgent (Clinician Agent)** | Monitors trends, prepares doctors before visits, escalates dangerous patterns |
-
-All three share a **single evolving Care Plan** object — the single source of truth.
-
----
-
-## 🏗️ Architecture
-
-```
-codekshetra/
-├── main.py                     # Entry point — runs full 30-day simulation in terminal
-├── server.py                   # Web server & REST API for interactive frontend
-├── requirements.txt
-├── .env.example
-│
-├── frontend/                   # Modern Web Application & Clinical Dashboard
-│   ├── index.html              # Landing page (hero, agents, architecture, demo flow)
-│   ├── dashboard.html          # Clinical Dashboard (30-day vitals, charts, player, chat)
-│   ├── styles.css              # Landing page styling & design tokens
-│   ├── dashboard.css           # Dashboard layout, metrics cards & dark theme
-│   ├── main.js                 # Landing page interactions & counters
-│   └── dashboard.js            # Chart.js charts, playback simulation engine & Asha AI chat
-│
-├── config/
-│   └── settings.py             # Patient profile, thresholds, medication schedule
-│
-├── core/
-│   ├── care_plan.py            # Shared CarePlan dataclass (singleton)
-│   ├── memory.py               # SQLite-backed long-term patient memory
-│   └── event_bus.py            # Pub/sub event bus for agent coordination
-│
-├── agents/
-│   ├── base_agent.py           # BaseAgent with Gemini LLM + fallback
-│   ├── patient_agent.py        # Patient check-ins, vitals, isolation detection
-│   ├── caregiver_agent.py      # Family notifications, weekly summaries
-│   └── clinician_agent.py      # Trend analysis, escalation, doctor briefings
-│
-├── simulation/
-│   ├── patient_data.py         # Realistic 30-day timeline generator
-│   └── demo_runner.py          # Orchestrates the 30-day demo
-│
-├── nlp/
-│   └── language_handler.py     # Hindi (Devanagari) + English message templates
-│
-├── api/
-│   └── mock_integrations.py    # Mock WhatsApp, Voice Call, SMS APIs
-│
-├── dashboard/
-│   └── report_generator.py     # Doctor-facing HTML/markdown report
-│
-├── data/                       # Auto-created: SQLite DB + logs + enriched timeline
-└── reports/                    # Auto-created: generated doctor pre-visit reports
-```
-
----
-
-## 🚀 Quick Start
-
-### 1. Clone / Open the project
-```bash
-cd hackthone
-```
-
-### 2. Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 3. (Optional) Set Gemini API Key for LLM responses
-```bash
-cp .env.example .env
-# Edit .env and add your GEMINI_API_KEY
-```
-> **Without a key:** The system runs in template mode with pre-written multilingual responses. All simulation logic and demo flow still works perfectly.
-
-### 4. Run the 30-day simulation
-```bash
-python main.py
-```
-
----
-
-## 🎬 Demo Flow (30-Day Simulation)
-
-The simulation runs through four phases, showing all four demo requirements:
-
-### Phase 1: Stable (Days 1–10) ✅
-- **Asha** conducts daily multilingual check-ins (Hindi + English)
-- Vitals logged: BP ~140/90, glucose ~175 mg/dL
-- 95% medication adherence
-- Social interactions regular
-- Weekly summary sent to Suresh (caregiver) on Day 7
-
-### Phase 2: Gradual Deterioration (Days 11–20) 📈
-- BP begins rising (140 → 155 mmHg)
-- Glucose climbing (175 → 220 mg/dL)
-- Medication adherence dropping
-- **Clinician Agent** detects upward BP trend on Day 14
-- Medication adherence alert fired on Day 19
-
-### Phase 3: Dangerous Trend (Days 21–27) ⚠️
-- **Day 22: ESCALATION TRIGGERED** — BP 165-175, glucose 280-310
-  - Clinician Agent escalates to Level 2
-  - Doctor alerted via WhatsApp
-  - Caregiver alerted urgently
-- **Day 24: ISOLATION DETECTED** — 5 consecutive days without social contact
-  - Patient Agent nudges patient to reconnect
-  - Caregiver Agent sends family alert
-- Day 27: Doctor visit preparation begins
-
-### Phase 4: Intervention (Days 28–30) 🆘→🏥
-- **Day 28: CRITICAL ESCALATION Level 3**
-  - Emergency voice call to patient
-  - SMS + WhatsApp to family
-  - Clinical escalation alert to doctor
-- Days 29-30: Family visits, vitals begin stabilising
-- **Day 30: DOCTOR VISIT** — full 30-day pre-visit report generated
-
----
-
-## 🌟 Key Features
-
-### 🤖 Patient Agent (Asha)
-- Proactive daily check-ins via voice call or WhatsApp
-- **Multilingual**: Hindi (Devanagari script) + English
-- Detects social isolation from 3+ consecutive non-interaction days
-- Tracks medication adherence and fires missed-medication events
-- Analyses mood, energy, and symptom patterns
-- Smart channel selection: voice call for critical/low-mood days
-
-### 👨‍👩‍👦 Caregiver Agent (ConnectAgent)
-- Subscribes to all alert events and notifies family instantly
-- Weekly health summary every 7 days
-- Urgency-based notifications: info / moderate / critical
-- Critical alerts sent via both WhatsApp AND SMS
-
-### 🩺 Clinician Agent (MedInsightAgent)
-- Runs trend analysis every 3 days
-- Detects deteriorating vs improving vs stable trends
-- Generates structured escalation alerts for doctors
-- Prepares comprehensive 30-day pre-visit briefings
-- Manages escalation levels 0-3 with reasons
-
-### 🗄️ Shared Infrastructure
-- **CarePlan**: Singleton shared state — all agents read/write the same object
-- **PatientMemory**: SQLite persistence — 5 tables for vitals, check-ins, meds, social, events
-- **EventBus**: Synchronous pub/sub — agents coordinate via named event types
-- **LanguageHandler**: Real Devanagari Hindi messages, not transliterations
-
----
-
-## 📊 Event Types
-
-| Event | Publisher | Subscriber(s) |
-|-------|-----------|---------------|
-| `VITALS_ALERT` | Patient Agent | Clinician Agent |
-| `MEDICATION_MISSED` | Patient Agent | Caregiver Agent |
-| `SOCIAL_ISOLATION_DETECTED` | Patient Agent | Caregiver Agent |
-| `ESCALATION_NEEDED` | Clinician Agent | Caregiver Agent, Doctor |
-| `FAMILY_NOTIFICATION` | Any | Caregiver Agent |
-| `DOCTOR_VISIT_APPROACHING` | Clinician Agent | (Triggers report prep) |
-
----
-
-## 🧠 LLM Integration
-
-- Uses **Google Gemini 1.5 Flash** via `google-generativeai`
-- Each agent has a specialised, context-rich prompt
-- **Graceful fallback**: If `GEMINI_API_KEY` is not set, the system uses detailed template-based responses with real Hindi text
-- All LLM calls include: patient vitals context, care plan state, escalation level, medication adherence
-
----
-
-## 🌐 Multilingual Support
-
-Hindi messages in Devanagari script are included for:
-- Morning/afternoon/evening greetings
-- Check-in messages
-- Medication reminders  
-- Family alerts (isolation, medication, critical)
-- Symptom responses (chest pain, dizziness, breathlessness)
-- Social nudges
-
-Example:
-> **नमस्ते राजी! सुप्रभात। 🌅**  
-> **रमेश जी, आशा यहाँ से बात कर रही हूँ। आज कैसा महसूस हो रहा है?**
-
----
-
-## 📋 Output Files
-
-After running the simulation:
-- `data/patient_memory.db` — SQLite database with all 30 days of data
-- `data/app.log` — Application logs
-- `reports/doctor_report_YYYYMMDD_HHMMSS.md` — Doctor pre-visit report
-
----
-
-## 🔧 Configuration
-
-Edit `config/settings.py` to customise:
-- Patient name, age, language, conditions
-- Vital thresholds (BP, glucose, heart rate)
-- Medication schedule (morning/afternoon/evening)
-- Agent check-in frequencies
-- Escalation triggers
-
----
-
-## 📦 Dependencies
-
-```
-google-generativeai>=0.8.0   # Gemini LLM API
-python-dotenv>=1.0.0         # Environment variable loading
-rich>=13.0.0                 # Beautiful terminal UI
-colorama>=0.4.6              # Terminal colours (Windows support)
-jinja2>=3.1.0                # Template rendering
-faker>=20.0.0                # Realistic data generation
-schedule>=1.2.0              # Task scheduling utilities
-```
-
----
-
-## 🏆 Hackathon Demo Checklist
-
-- [x] **Patient agent initiates voice/WhatsApp check-ins on its own schedule**
-- [x] **Simulated 30-day patient timeline** with realistic deteriorating trend
-- [x] **Agents catch deteriorating trend and escalate** (Day 14, 22, 28)
-- [x] **Doctor-facing summary** of everything between visits (Day 30)
-- [x] **Social wellbeing behaviour** — isolation detection + family/community nudge (Day 24)
-- [x] **Agent-to-agent coordination** via shared event bus
-- [x] **Multilingual (Hindi/English)** with Devanagari script
-- [x] **Gemini LLM integration** with graceful template fallback
-
----
-
-## 👥 Team
-
-Built for **Track 4: Healthcare & Social Impact — HEALTH-01**  
-*Proactive Agents for Chronic Care and Healthy Ageing*
-
----
-
-## 📄 License
-
-MIT License — built for the hackathon demo.
-
-
----
-
-## 💻 Frontend Web Application & Live Dashboard
-
-CareSync AI features a production-grade, responsive Web Application and Clinical Dashboard located in the `frontend/` directory.
-
-### ✨ Key Frontend Features
-
-1. **🏥 Dual-View Experience**:
-   - **Landing Page (`frontend/index.html`)**: Introduces the problem statement, life expectancy gap in India (71 yrs life expectancy vs 60.6 yrs healthy life), multi-agent architecture, event bus coordination, interactive vitals ticker, 30-day timeline walkthrough, and impact metrics.
-   - **Clinical Dashboard (`frontend/dashboard.html`)**: Rich doctor and caregiver dashboard with real-time analytics, KPIs, Chart.js graphs, vitals table, and escalation status.
-
-2. **📊 Five Interactive Chart.js Visualizations**:
-   - **Blood Pressure Trend**: Systolic & Diastolic lines over 30 days with 160/100 danger threshold references.
-   - **Escalation Timeline**: Color-coded alert levels (Level 0 green, Level 1 yellow, Level 2 orange, Level 3 red).
-   - **Blood Glucose Trend**: Continuous glycaemic monitoring with warning (250 mg/dL) and critical (300 mg/dL) indicators.
-   - **Heart Rate & Weight (Dual-Axis)**: Left-axis bpm tracking alongside right-axis kg weight drift.
-   - **Mood & Social Score**: Combines daily patient emotional wellbeing (1–5 scale) with social interaction indicators.
-
-3. **🎛️ Interactive Phase Filtering & Sparklines**:
-   - Seamless one-click filtering for **Phase 1 (Days 1–10)**, **Phase 2 (Days 11–20)**, **Phase 3 (Days 21–27)**, **Phase 4 (Days 28–30)**, or **All 30 Days**.
-   - Dynamically re-aggregates averages (BP, Glucose, HR, Medication Adherence %) on the fly with live canvas sparkline redraws.
-
-4. **▶️ Day-by-Day Simulation Playback Player**:
-   - Watch the 30-day chronic care journey unfold with Play / Pause / Reset controls and variable playback speed (`0.5x`, `1x`, `2x`).
-   - Automatically highlights and scrolls each day in the vitals table.
-   - Triggers live on-screen toast notifications at key clinical milestones:
-     - **Day 7**: Weekly summary sent to Suresh Kumar (Caregiver).
-     - **Day 14**: MedInsightAgent detects rising BP trend. Escalation to Level 1.
-     - **Day 19**: Medication adherence drop alert! Caregiver notified via WhatsApp.
-     - **Day 22**: Level 2 Warning! BP 161/101 & glucose 285 mg/dL. Dr. Anjali Sharma alerted.
-     - **Day 24**: Social Isolation detected (5 days alone). Asha nudged patient; family alert sent.
-     - **Day 28**: CRITICAL Level 3! Emergency voice call to Ramesh ji. Family & doctor dispatched.
-     - **Day 30**: Doctor visit day! Comprehensive 30-day clinical report generated.
-
-5. **🔍 30-Day Vitals Table with Search & CSV Export**:
-   - Color-coded rows (`.tr-stable`, `.tr-deteriorating`, `.tr-dangerous`, `.tr-intervention`) and vital flags.
-   - Instant real-time text search filtering across day, date, phase, symptoms, and status.
-   - One-click **"Export CSV ⤓"** downloads the full 30-day dataset.
-
-6. **🔍 Interactive Day Inspector Modal**:
-   - Click on any day row to view a comprehensive modal breakdown:
-     - Exact physiological metrics (BP, glucose, HR, weight, sleep, activity)
-     - Prescribed medications list and adherence status
-     - Asha's voice/WhatsApp check-in transcript in genuine Devanagari Hindi with English translation
-     - ConnectAgent's family coordination action
-     - MedInsightAgent's clinical diagnostic assessment
-
-7. **📄 Pre-Visit Clinical Doctor Report Viewer**:
-   - Full 30-day pre-visit report viewer with markdown rendering and one-click print capability.
-
-8. **🤖 Interactive Asha AI Chat Assistant**:
-   - Floating companion widget allowing judges and users to converse directly with Asha in Hindi or English.
-   - Clinical triage for emergency chest pain, dizziness, missed medicines, loneliness, and vitals status inquiries.
-   - Real-time simulation of event bus triggers and caregiver alert notifications.
-
----
-
-## 🚀 Steps to Execute the Project
-
-### Prerequisites
-- Python 3.9 or higher installed
-- Modern web browser (Chrome, Edge, Firefox, or Safari)
-
----
-
-### Step 1: Install Dependencies
-Open your terminal in the project root directory and run:
-```bash
-pip install -r requirements.txt
-```
-
----
-
-### Step 2: (Optional) Configure Gemini LLM API Key
-CareSync AI works completely out of the box with intelligent multilingual template responses. To enable Google Gemini 1.5 Flash for dynamic agent replies:
-```bash
-cp .env.example .env
-# Open .env and add your key:
-# GEMINI_API_KEY=your_gemini_api_key_here
-```
-
----
-
-### Step 3: Execution Methods
-
-You can experience CareSync AI in three different ways:
-
-#### 🌟 Method 1: Interactive Web Application (Recommended for Demo & Judges)
-Launch the CareSync local server:
-```bash
-python server.py
-```
-Then open your web browser to:
-- **Landing Page**: [http://localhost:8000/](http://localhost:8000/) or [http://localhost:8000/index.html](http://localhost:8000/index.html)
-- **Clinical Dashboard**: [http://localhost:8000/dashboard.html](http://localhost:8000/dashboard.html)
-
-*Features active in this mode:*
-- Full landing page and live interactive clinical dashboard
-- Interactive Day-by-Day Simulation Playback with speed toggles
-- Dynamic Chart.js charts and phase filters
-- Clickable day rows with detailed Day Inspector Modal
-- Pre-Visit Doctor Clinical Report viewer
-- Live Asha conversational AI chat with backend REST API integration!
-
-#### 🖥️ Method 2: 30-Day Terminal Simulation Demo
-Run the complete multi-agent 30-day CLI simulation in your terminal:
-```bash
-python main.py
-```
-*What happens:*
-- Boots the SQLite memory store, shared CarePlan, and EventBus.
-- Initializes Asha (Patient Agent), ConnectAgent (Caregiver Agent), and MedInsightAgent (Clinician Agent).
-- Runs day-by-day with rich color-coded terminal panels.
-- Demonstrates Day 7 summary, Day 14 BP trend detection, Day 19 adherence alert, Day 22 escalation, Day 24 isolation detection, Day 28 emergency call, and Day 30 doctor visit report generation.
-- Outputs generated report to `reports/doctor_report_YYYYMMDD_HHMMSS.md` and database to `data/patient_memory.db`.
-
-#### 🌐 Method 3: Direct Browser Opening (Zero-Install Alternative)
-You can also open the frontend directly in your browser without running any server:
-1. Double-click or open `frontend/index.html` in your browser.
-2. Click **"Live Dashboard →"** or open `frontend/dashboard.html`.
-3. All 30 days of data, Chart.js visualizations, phase filters, day playback, modals, and client-side conversational AI chat will run smoothly offline!
+# CareSync AI: Proactive Multi-Agent Chronic Care
 
+> Hackathon Track 4: Healthcare & Social Impact, HEALTH-01
+> *Proactive Agents for Chronic Care and Healthy Ageing*
+
+Elderly patients with hypertension and diabetes get worse in the gaps between doctor visits: missed medicines, unnoticed warning signs, loneliness. CareSync AI puts five coordinating agents around one patient (Ramesh Kumar, 78). They reach out first, catch a deteriorating trend, keep the family informed, and brief the doctor before the next visit. All of them share one evolving care plan.
+
+| Agent | Role |
+|---|---|
+| **Asha** (Patient Agent) | Proactive check-ins in Hindi, Marathi and English. Logs vitals, meds, mood and social contact to memory. Live chat. |
+| **RiskAnalysisAgent** | Rule-based clinical triage (Normal → Emergency) with 7-day baseline comparison. **Never relies on the LLM for safety decisions.** |
+| **SocialWellbeingAgent** | Detects isolation (3+ days without contact), nudges the patient, asks family to reconnect. |
+| **ConnectAgent** (Caregiver Agent) | Urgency-tiered WhatsApp/SMS alerts and weekly summaries to the son. Alert acknowledgement. |
+| **MedInsightAgent** (Clinician Agent) | 10-point doctor dashboard, LLM-written pre-visit briefing, care-plan approval gate. |
 
 ---
 
-## 🚀 Updated: Complete Multi-Agent Platform — Full Execution Guide
+## Quick start
 
-> This section covers the fully upgraded CareSync AI platform (5 coordinating agents, 4 role-based portals, and a complete REST API).
+Requirements: Python 3.9+, Node 18+ (only to build the React frontend).
 
----
-
-### ✅ Prerequisites
-
-| Requirement | Version |
-|-------------|---------|
-| Python | 3.9+ |
-| Browser | Chrome / Edge (for Web Speech API voice features) |
-| SQLite | Bundled with Python |
-| (Optional) Gemini API Key | For live LLM-powered Asha conversations |
-
-Install Python dependencies:
 ```bash
-cd codekshetra
+# 1. Backend dependencies
 pip install -r requirements.txt
-```
 
----
+# 2. Configure the LLM (optional, everything works without it)
+cp .env.example .env          # then set GEMINI_API_KEY=...
 
-### Step 1: Run the 30-Day Multi-Agent Terminal Simulation
-
-This seeds the SQLite database (`data/patient_memory.db`) with 30 days of longitudinal patient data that the web dashboards read from.
-
-```bash
+# 3. Seed the database + timeline + doctor report (30-day simulation)
 python main.py
+
+# 4. Build the React frontend once
+cd react-frontend
+npm install
+npm run build
+cd ..
+
+# 5. Start the server: serves the React app AND the REST API
+python server.py              # → http://localhost:8000
 ```
 
-**What executes:**
-- Instantiates all 5 agents: Asha, RiskAnalysisAgent, SocialWellbeingAgent, ConnectAgent, MedInsightAgent
-- Runs 30 simulated days through the `DemoRunner` orchestration engine
-- Fires all 4 canonical daily scheduled jobs (08:00, 09:00, 13:00, 19:00) per day
-- Publishes 100+ events through the synchronous pub/sub EventBus
-- Generates a clinical pre-visit report: `reports/doctor_report_YYYYMMDD_HHMMSS.md`
-- Saves all vitals, medications, check-ins to `data/patient_memory.db`
+**Frontend development (hot reload):** run `python server.py` in one terminal and `cd react-frontend && npm run dev` in another, then open http://localhost:5173. Vite proxies every `/api/*` request to `:8000`.
+
+> The React app in `react-frontend/` is the only frontend. If it hasn't been built (`react-frontend/dist/` missing), `server.py` still serves the API and shows a "build the frontend" page at `/`.
 
 ---
 
-### Step 2: (Optional) Configure Gemini LLM for Live AI Responses
+## The React app
 
-```bash
-cp .env.example .env
-# Edit .env and set:
-# GEMINI_API_KEY=your_gemini_api_key_here
-```
+| Route | What it does |
+|---|---|
+| `/` | Landing page: problem, agents, 30-day storyline, architecture |
+| `/agents` | **Agent Control Room.** Step through the 30-day timeline one day at a time or auto-play. Each day runs the proactive scheduler, and you watch the event bus, the agents' outbound WhatsApp messages and the escalation level update live. Includes a Gemini live-test button. |
+| `/clinician` | KPIs, BP/glucose/mood charts with phase filter, AI observations, **Gemini pre-visit briefing**, care-plan proposal approve/reject, full vitals log, latest doctor report |
+| `/caregiver` | Status for the son, alerts from ConnectAgent with acknowledgement and action logging, WhatsApp thread |
+| `/patient` | Chat with Asha (हिन्दी / English / मराठी, voice input and read-aloud in Chrome/Edge), daily check-in form triaged by RiskAnalysisAgent, SOS button |
 
-Without the key, the platform uses a high-quality multilingual rule-based system for all agent responses (Hindi, Marathi, English). The patient portal, chat, and emergency alerts all work offline.
+The top bar shows the LLM state on every page: `Gemini · <model>`, `Template mode (no key)`, `Gemini errors` or `Backend offline`. Every portal opens with a short "how to use this page" guide (dismiss it with **Got it**, reopen it from the link that replaces it). The red number on **Caregiver** in the sidebar is the count of alerts still waiting for a response. A red banner appears if the backend is unreachable.
 
----
+### How the caregiver acknowledges an alert
 
-### Step 3: Launch the Multi-Agent Web Server
+1. Open **Caregiver**. Alerts that still need a response are under **Needs action**, with urgent ones first.
+2. Under an alert, tap what you did: **I called Papa**, **I visited him**, **Reminded him about medicines**, **Booked a doctor visit**. It saves immediately (`POST /api/caregiver/acknowledge`).
+3. For anything else, tap **Something else…**, type the action, optionally add a note for the doctor, then **Log action**.
+4. The alert moves to **Done** with your action shown on it. It also appears in "What you've done" and as a `CAREGIVER_ACTION_RECORDED` event in the Agent Control Room.
+5. **Mark N non-urgent as seen** clears informational alerts in one go. Urgent ones stay open.
 
-```bash
-python server.py
-```
+Alerts are stored in SQLite (`caregiver_alerts` table), so they survive server restarts. After `python main.py` the hub holds the full 30-day history (about 53 alerts, 14 urgent). Alerts come from ConnectAgent (risk, medication, isolation, escalation), SocialWellbeingAgent nudges, Asha chat red flags and the SOS button.
 
-The server starts on `http://localhost:8000` and exposes all four role-based portals:
-
-| Portal | URL | Role |
-|--------|-----|------|
-| 🏠 Landing Page | `http://localhost:8000/` | Public overview |
-| 🧓 **Patient Portal** | `http://localhost:8000/patient.html` | Elderly patient (voice/multilingual) |
-| 👨‍👩‍👦 **Caregiver Hub** | `http://localhost:8000/caregiver.html` | Suresh Kumar (family caregiver) |
-| 🩺 **Clinician Dashboard** | `http://localhost:8000/dashboard.html` | Dr. Anjali Sharma (doctor) |
-| 🤖 **Multi-Agent Demo Studio** | `http://localhost:8000/demo.html` | System visibility & hackathon demo |
+**Suggested demo:** open `/agents` → click **Jump to day 21** → **Auto-play**. Escalation goes to Level 2, then Level 3 on day 28, and alerts reach the caregiver and doctor. Then check `/caregiver` (acknowledge an alert), `/clinician` (generate the AI briefing, approve the Amlodipine proposal) and `/patient` (type "I have chest pain").
 
 ---
 
-### Step 4: Portal-by-Portal Walkthrough (For Evaluators)
+## How the API works
 
-#### 🧓 Patient Portal (`patient.html`)
-- **Language switch**: Toggle between Hindi 🇮🇳, Marathi 🚩, English 🇬🇧 (top right buttons)
-- **Mood check-in**: Tap one of 4 mood buttons — Asha auto-responds in the selected language
-- **Medication adherence**: Mark each medication taken / missed — missed triggers a caregiver WhatsApp
-- **Log vitals**: Enter BP, glucose, heart rate → saved to SQLite persistent memory
-- **Voice chat** (Chrome/Edge): Click 🎤 and speak in Hindi/Marathi/English — Web Speech API transcribes; Asha responds with TTS audio
-- **Emergency SOS** 🆘: One-touch red button triggers Level 3 escalation, dispatches WhatsApp & SMS to son and doctor instantly
+`server.py` is a dependency-free Python `ThreadingHTTPServer` on port 8000 that listens on both IPv4 and IPv6. One process holds a single agent network (one `EventBus`, one `CarePlan`, one `PatientMemory` on `data/patient_memory.db`) and exposes it as JSON over REST. It also serves the React app with SPA routing. CORS is open (`*`).
 
-#### 👨‍👩‍👦 Caregiver Hub (`caregiver.html`)
-- View scoped health KPIs (no raw clinical notes — role-based privacy)
-- **Acknowledge alerts**: Click "Acknowledge & Log Action" on any active alert → opens modal to record follow-up action (visible in clinician's audit trail)
-- **WhatsApp thread**: All dispatched notifications shown with delivery status badges (`Delivered ✓✓`, `Read 👁️`, `SMS Fallback`)
-- **Send family check-in**: Sends a simulated WhatsApp reply message
+- **Thread safety:** all agent and DB access goes through one lock, because the agents and the single SQLite connection aren't thread-safe and the UI polls several endpoints at once. Gemini calls run outside the lock so a slow LLM reply doesn't freeze the dashboards.
+- **Errors are always JSON** `{"error": "...", "status": N}`: `400` bad or missing input, `404` unknown endpoint, alert or proposal, `405` wrong method, `409` proposal already reviewed, `413` body too large, `500` unexpected error (logged with a traceback).
+- **On startup** the live escalation level is restored from the latest stored reading (e.g. Level 2 after the 30-day run) instead of always starting at 0.
 
-#### 🩺 Clinician Dashboard (`dashboard.html`)
-- **30-day chart playback**: Press ▶ Play Sim to animate 30 days of vital trends
-- **Care plan proposals**: Click **✓ Approve & Update** or **✗ Reject** on pending proposals from agents — state persists via `POST /api/care-plan/review`
-- **📊 10-Point Briefing**: Opens MedInsightAgent's structured clinical briefing loaded from `/api/clinician/dashboard`
-- **📄 Full Report**: Pre-visit clinical summary markdown generated by `main.py`
-- **Asha chat drawer**: Floating 🤖 button in bottom-right for live multilingual agent testing
+**Check every endpoint:** with the server running, `python scripts/api_check.py` runs 48 checks covering happy paths, bad input and state changes such as SOS → alert → acknowledge. Add `--no-llm` to skip Gemini calls. It resets the live session at the end. Last run: **48/48 passed**.
 
-#### 🤖 Multi-Agent Demo Studio (`demo.html`)
-- **5 Active Agents panel**: Live status of all coordinating agents with role labels
-- **▶ Run Next Proactive Day**: Triggers `POST /api/schedule/run-day` — all 4 autonomous scheduled tasks fire
-- **🚨 Trigger Chest Pain Scenario**: Simulates an emergency — fires Emergency event, caregiver WhatsApp, updates escalation
-- **📡 Event Bus Chronicle**: Live feed from `/api/events` showing all inter-agent pub/sub dispatches (RISK_ALERT_ISSUED, CARE_PLAN_PROPOSAL_CREATED, EMERGENCY_TRIGGERED, etc.)
-- **WhatsApp Gateway Simulator**: Interactive mock showing all dispatched messages; type a message to simulate patient/caregiver inbound reply
+### Two entry points, one database
 
----
+| | `python main.py` | `python server.py` |
+|---|---|---|
+| Purpose | Batch 30-day simulation in the terminal | Interactive web app + REST API |
+| Writes | **Resets** and reseeds `data/patient_memory.db`, writes `data/timeline_enriched.json` and `reports/doctor_report_*.md` | Appends live check-ins to the same DB |
+| Agent state | Lives for the run | Event bus and mock WhatsApp log live in server memory and reset on restart. **Caregiver alerts and actions persist in SQLite.** Escalation is restored from the latest stored reading. |
 
-### Step 5: Zero-Install Offline Demo (No Server Required)
+Run `main.py` before the server so `/api/timeline`, `/api/report` and the charts have data.
 
-All four portals also work without `server.py` by opening HTML files directly in the browser:
+### Endpoints
 
-```bash
-# Windows
-start frontend/index.html
-start frontend/patient.html
-start frontend/caregiver.html
-start frontend/dashboard.html
-start frontend/demo.html
-```
+All endpoints were verified to return HTTP 200 against a running server.
 
-In offline mode:
-- All 30-day charts, timeline data, and clinical report content are embedded in `dashboard.js`
-- Asha's multilingual chat uses client-side triage rules
-- Emergency SOS, mood buttons, and medication buttons work with local JS fallbacks
-- Voice STT/TTS works (uses browser Web Speech API — no server needed)
+| Method | Endpoint | What it does | Real or mock |
+|---|---|---|---|
+| GET | `/api/status` | Agent registry, profiles, escalation level, `gemini_active` | Real |
+| GET | `/api/llm/status` | LLM config, call counters and last error. Add `?test=1` to fire a live Gemini request. | Real |
+| GET | `/api/timeline` | 30-day timeline from `data/timeline_enriched.json` | Simulated data |
+| GET | `/api/report` | Latest `reports/doctor_report_*.md` | Real (generated) |
+| GET | `/api/clinician/dashboard` | MedInsightAgent 10-point structured briefing from SQLite | Real |
+| GET | `/api/clinician/ai-briefing` | Gemini-written pre-visit narrative from that dashboard. Falls back to rule-based observations without a key. | **LLM** |
+| GET | `/api/caregiver/dashboard` | Privacy-scoped caregiver view: persistent alerts (`notifications`), `unacknowledged_count`, `latest_vitals`, 7-day adherence and social contact, logged actions | Real |
+| GET | `/api/care-plan` | Shared care plan incl. proposals and audit events | Real |
+| GET | `/api/schedule` | Scheduler jobs + execution history | Real |
+| GET | `/api/events?limit=&type=` | Event bus history | Real |
+| GET | `/api/whatsapp/messages?limit=` | Messages agents "sent" | **Mock** gateway |
+| POST | `/api/chat` `{message, language: hi\|en\|mr, day}` | Asha reply. Gemini with patient memory context, else multilingual fallback. Keyword triage fires emergency/risk events. Response includes `llm_used`, `model`, `llm_error`. | **LLM** + rules |
+| POST | `/api/patient/checkin` `{bp_systolic, bp_diastolic, blood_glucose, heart_rate, medication_taken, mood, symptoms[]}` | Saves to memory, RiskAnalysisAgent triages, **dispatches alerts and escalates** | Real |
+| POST | `/api/schedule/run-day` `{day, data}` | Runs the 4 daily jobs: 08:00 full Asha check-in → 09:00 meds → 13:00 social → 19:00 risk review | Real |
+| POST | `/api/emergency` `{day}` | SOS: escalation → Level 3, WhatsApp to son and doctor | Real logic, mock delivery |
+| POST | `/api/caregiver/acknowledge` `{alert_id, action_taken, notes?}` | Marks the alert done, logs the caregiver action, publishes `CAREGIVER_ACTION_RECORDED`. `400` if fields are missing, `404` for an unknown alert. | Real |
+| POST | `/api/demo/reset` | Resets the live session: clears events and mock messages, rebuilds the agents, restores escalation from the latest reading. DB history is kept. | Real |
+| POST | `/api/care-plan/review` `{proposal_id, approve, notes}` | Clinician approves or rejects a proposal | Real |
+| POST | `/api/care-plan/propose` | Agent/doctor proposes a care-plan change | Real |
+| POST | `/api/whatsapp/simulate-inbound` | Fake an inbound WhatsApp reply | Mock |
 
----
+**What is mocked:** WhatsApp, SMS and voice calls (`api/mock_integrations.py`) only record messages in memory. No real message leaves the machine. Patient data is simulated (`simulation/patient_data.py`, seed 42).
 
-### REST API Reference
+### Agent coordination (event bus)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/status` | All 5 agents' status + system config |
-| GET | `/api/timeline` | 30-day enriched timeline JSON |
-| GET | `/api/report` | Pre-visit clinical summary markdown |
-| GET | `/api/caregiver/dashboard` | Privacy-scoped caregiver view |
-| GET | `/api/clinician/dashboard` | 10-point MedInsightAgent clinical briefing |
-| GET | `/api/care-plan` | Full evolving care plan with proposals |
-| GET | `/api/schedule` | Autonomous scheduler config + history |
-| GET | `/api/events` | Live EventBus dispatch history |
-| GET | `/api/whatsapp/messages` | WhatsApp gateway message log |
-| POST | `/api/chat` | Multilingual Asha AI chat (hi/mr/en) |
-| POST | `/api/patient/checkin` | Save vitals + run risk analysis |
-| POST | `/api/caregiver/acknowledge` | Log caregiver alert acknowledgment |
-| POST | `/api/care-plan/review` | Doctor approve/reject care plan proposal |
-| POST | `/api/care-plan/propose` | Submit new care plan update proposal |
-| POST | `/api/emergency` | Trigger SOS escalation protocol |
-| POST | `/api/schedule/run-day` | Execute autonomous scheduled day |
-| POST | `/api/whatsapp/simulate-inbound` | Simulate inbound WhatsApp message |
+| Event | Published by | Handled by |
+|---|---|---|
+| `VITALS_ALERT` (BP ≥ 150 or glucose ≥ 250) | Asha | RiskAnalysisAgent, MedInsightAgent |
+| `CHECKIN_COMPLETED` | Asha | RiskAnalysisAgent |
+| `RISK_ALERT_ISSUED` | RiskAnalysisAgent (deduplicated per day/level) | ConnectAgent, MedInsightAgent |
+| `MEDICATION_MISSED` | Asha / scheduler | ConnectAgent |
+| `SOCIAL_ISOLATION_DETECTED`, `SOCIAL_INTERVENTION_TRIGGERED` | Asha, SocialWellbeingAgent | ConnectAgent |
+| `ESCALATION_NEEDED`, `EMERGENCY_TRIGGERED` | MedInsightAgent, SOS, chat | ConnectAgent, MedInsightAgent |
+
+Escalation levels: 0 Normal · 1 Watch · 2 Warning · 3 Critical.
 
 ---
 
-### Architecture: 5 Coordinating AI Agents
+## LLM (Gemini) status
+
+**Is it working?** Yes. With the key in `.env` it was verified end to end on Nov 1, 2026: `/api/llm/status?test=1` → `ok`, `/api/chat` (English and Hindi) → `llm_used: true`, `/api/clinician/ai-briefing` → `llm_used: true`, model `gemini-flash-lite-latest`.
+
+### Why it was not working before
+
+The API key was not the problem. These were:
+
+1. **Retired model.** `gemini-1.5-flash` was hardcoded in `agents/base_agent.py` and `server.py`. Google now returns **HTTP 404** for it, and also for `gemini-2.0-flash` and `gemini-2.5-flash` on new keys.
+2. **Silent failure.** Every exception was swallowed (`except: pass`) and the template reply was returned, so the app looked fine but never used the LLM. `main.py` printed "Gemini detected" whenever *any* key string existed, without testing it.
+3. **Wrong variable name in `.env.example`.** It said `GOOGLE_API_KEY`, but the code reads `GEMINI_API_KEY`.
+
+### How it works now (`core/llm.py`)
+
+- One shared client for all agents, the Asha chat engine and the server. It calls the Gemini REST API directly with the Python stdlib, so the deprecated `google-generativeai` SDK is no longer needed.
+- **Model fallback chain**, tried in order: `gemini-flash-lite-latest` → `gemini-3.5-flash-lite` → `gemini-flash-latest`. The `-latest` aliases keep working when Google retires versions. It stops early on 400/401/403 (key problems).
+- 20 s timeout per request. Failures are logged and exposed through `/api/llm/status` (`last_error`) and the `llm_error` field of chat/briefing responses.
+- `main.py` now performs a real test call at startup and prints `✅ reachable`, `❌ failing — <reason>` or `no key`.
+
+### Where the LLM is (and is not) used
+
+| Feature | Uses Gemini? |
+|---|---|
+| Asha chat (`/api/chat`) | Yes, with stored patient memory (7-day BP trend, adherence, symptoms, escalation) in the prompt |
+| Clinician AI briefing (`/api/clinician/ai-briefing`) | Yes |
+| Risk triage, escalation, emergency detection | **No, by design.** Rule-based for safety. |
+| Daily check-in messages, family alerts, weekly summaries, the 30-day `main.py` run | No. Curated multilingual templates (`nlp/language_handler.py`), fast and deterministic. |
+
+### Configuration (`.env`)
+
+```ini
+GEMINI_API_KEY=your_key            # required for LLM mode; key name must be exactly this
+GEMINI_MODEL=gemini-flash-lite-latest,gemini-flash-latest   # optional override (comma-separated)
+GEMINI_TIMEOUT=20                  # optional, seconds
+```
+
+### Troubleshooting
+
+Open `http://localhost:8000/api/llm/status?test=1`, or click **Run live test** in the Agent Control Room:
+
+| You see | Meaning / fix |
+|---|---|
+| `configured: false` | `.env` missing, or the key isn't named `GEMINI_API_KEY`. Restart the server after editing `.env`. |
+| `HTTP 400/403 API key not valid` | Create a new key at https://aistudio.google.com/app/apikey |
+| `HTTP 404 ... no longer available` | Model retired. Set `GEMINI_MODEL` to a model listed by `GET https://generativelanguage.googleapis.com/v1beta/models` |
+| `HTTP 429` / `503 high demand` | Quota or overload. The client automatically tries the next model, or wait and retry. |
+| `TimeoutError` | Slow model or network. Raise `GEMINI_TIMEOUT` or pick a `-lite` model. |
+
+---
+
+## Bugs fixed in this revision
+
+- LLM never called (retired model, silent errors, `.env.example` key name). See above.
+- `POST /api/emergency` crashed: it called the non-existent `care_plan.update_escalation()`. It now uses `escalate()`.
+- Live check-ins never alerted anyone: `RiskAnalysisAgent.evaluate_health_record()` only computes a result. Added `assess()` (evaluate + dispatch + escalate), used by `/api/patient/checkin`.
+- Scheduler's 08:00 job only built a greeting string, so `run-day` never logged vitals or triggered other agents. It now runs Asha's full check-in pipeline. Mood strings (`"tired"`) are normalised to 1–5.
+- Duplicate `RISK_ALERT_ISSUED` per reading, which sent the family two identical alerts. Now deduplicated.
+- `main.py` appended another 30 days to the DB on every run (173 rows for 30 days), which skewed every average and adherence figure. It now resets the DB first.
+- `main.py` never wrote `data/timeline_enriched.json`, so `/api/timeline` and the charts were empty.
+- **Caregiver alerts were empty.** They lived only in server memory (gone on restart, never filled by `main.py`), and SOS and chat emergencies bypassed ConnectAgent. Alerts are now persisted, and every alert source goes through ConnectAgent.
+- Acknowledging accepted any alert ID and returned success. Unknown IDs now return 404.
+- Any exception (e.g. `"bp_systolic": "abc"`) dropped the connection with no response. Every route now returns JSON errors with proper status codes.
+- Every request through `localhost` took about **2 s** on Windows (IPv4-only server, browser tries IPv6 first). With the dual-stack server it's about 5 ms.
+- Approving a free-text care-plan proposal replaced the entire medication list (or activity goals) with a string. It's now recorded as an amendment.
+- The server's care plan had no medications or goals, and always started at escalation 0 regardless of history.
+
+---
+
+## Project structure
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    CareSync AI — Agent Ecosystem                    │
-│                                                                     │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐             │
-│  │     Asha     │  │ RiskAnalysis │  │SocialWellbeing│            │
-│  │ Patient Agent│  │    Agent     │  │    Agent     │             │
-│  │ Hindi/Marathi│  │ Deterministic│  │Isolation/SDOH│             │
-│  │ Voice + Chat │  │  Thresholds  │  │  Walking     │             │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘             │
-│         │                 │                  │                     │
-│         └─────────────────┴──────────────────┘                     │
-│                           │                                        │
-│                    ┌──────▼────────────────────────┐               │
-│                    │     Synchronous EventBus       │               │
-│                    │  (Pub/Sub audit log, 17 types) │               │
-│                    └──────┬────────────────────────┘               │
-│                           │                                        │
-│         ┌─────────────────┴──────────────────┐                     │
-│         │                                    │                     │
-│  ┌──────▼───────┐                   ┌────────▼────────┐            │
-│  │ConnectAgent  │                   │MedInsightAgent  │            │
-│  │  Caregiver   │                   │  Clinician      │            │
-│  │  WhatsApp &  │                   │  10-Point Brief │            │
-│  │  Action Logs │                   │  Care Plan Auth │            │
-│  └──────────────┘                   └─────────────────┘            │
-│                                                                     │
-│  ┌───────────────────────────────────────────────────────────────┐ │
-│  │  Shared SQLite PatientMemory (data/patient_memory.db)         │ │
-│  │  Shared CarePlan (proposals, approvals, audit trail)          │ │
-│  │  AutonomousScheduler (08:00 / 09:00 / 13:00 / 19:00 daily)   │ │
-│  └───────────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────┘
+codekshetra/
+├── main.py                  # 30-day batch simulation → DB, timeline JSON, doctor report
+├── server.py                # REST API + serves the built React app (react-frontend/dist)
+├── core/
+│   ├── llm.py               # Shared Gemini REST client (fallback chain, diagnostics)
+│   ├── care_plan.py         # Shared evolving care plan + proposal/approval lifecycle
+│   ├── memory.py            # SQLite longitudinal memory (vitals, check-ins, meds, social, events…)
+│   ├── event_bus.py         # Synchronous pub/sub between agents
+│   └── scheduler.py         # Proactive daily jobs (08:00 / 09:00 / 13:00 / 19:00)
+├── agents/                  # base, patient (Asha), risk, social, caregiver, clinician
+├── nlp/                     # conversational_ai.py (Asha chat), language_handler.py (hi/mr/en templates)
+├── api/mock_integrations.py # Mock WhatsApp / SMS / voice
+├── simulation/              # 30-day timeline generator + demo runner
+├── dashboard/report_generator.py
+├── config/settings.py       # Patient profile, thresholds, medication schedule
+├── scripts/api_check.py     # 48-check smoke test of every endpoint (python scripts/api_check.py)
+├── react-frontend/          # React 19 + Vite + React Router + Chart.js + lucide-react
+│   └── src/{api.js, components/, pages/}
+├── data/                    # Generated: patient_memory.db, timeline_enriched.json, app.log
+└── reports/                 # Generated doctor pre-visit reports
 ```
 
-### Key Technical Differentiators (HEALTH-01 Requirements)
+## HEALTH-01 demo checklist
 
-| Requirement | Implementation |
-|-------------|----------------|
-| Proactive agents (no patient-initiated only) | `AutonomousScheduler` fires 4 daily jobs independently |
-| Shared longitudinal memory | SQLite `PatientMemory` with contextual retrieval layer |
-| Evolving care plan | `CarePlan.propose_update()` → clinician approval lifecycle |
-| Multilingual (Hindi, Marathi, English) | `LanguageHandler` + Web Speech API STT/TTS |
-| Social wellbeing agent | `SocialWellbeingAgent` tracks isolation, nudges activity |
-| Deterministic medical triage | `RiskAnalysisAgent` with 5 risk levels; never LLM-only |
-| Emergency fail-safe | SOS button → direct SMS+WhatsApp; no LLM in critical path |
-| Role-based access | Caregiver sees no raw clinical notes; clinician sees all |
-| Voice interaction | Web Speech API (patient.html) — STT mic + TTS playback |
-| WhatsApp adapter | `MockWhatsApp` with sent→delivered→read state transitions |
+- [x] Patient agent initiates check-ins on its own schedule (`AutonomousScheduler`, voice on critical/low-mood days)
+- [x] Simulated 30-day timeline where agents catch the deteriorating trend and escalate (Level 2 → Level 3)
+- [x] Doctor-facing summary of everything between visits (10-point dashboard, Gemini briefing, markdown report)
+- [x] Social wellbeing: isolation detected, patient nudged, family asked to reconnect
+- [x] Agent-to-agent coordination over a shared event bus and one care plan
+- [x] Multilingual: Hindi, Marathi, English (Devanagari)
+- [x] Safe escalation: rule-based triage, deduplicated alerts, clinician approval for medication changes
+
+*Demo only. Not a medical device. All patient data is synthetic.*

@@ -224,7 +224,8 @@ ESCALATION_COLORS = {
 # LLM Settings
 # ─────────────────────────────────────────────────────────────────────────────
 LLM_CONFIG = {
-    "model": "gemini-1.5-flash",
+    # Informational only — the real model list lives in core/llm.py / GEMINI_MODEL env var.
+    "model": "gemini-flash-lite-latest",
     "temperature": 0.7,
     "max_output_tokens": 1024,
     "timeout_seconds": 30,
